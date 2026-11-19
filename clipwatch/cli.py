@@ -58,6 +58,7 @@ def cmd_watch(a) -> int:
     out_root = Path(a.out) / stream.channel
     buffer_dir = out_root / ".buffer"
     out_root.mkdir(parents=True, exist_ok=True)
+    opts.cam_memory = out_root / "webcam.json"
 
     chat_det = ChatSpikeDetector(multiplier=a.sensitivity, min_messages=a.min_messages, cooldown=a.cooldown)
     audio_det = AudioSpikeDetector(jump_db=a.audio_jump, cooldown=a.cooldown)

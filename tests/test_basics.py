@@ -93,8 +93,8 @@ def test_youtube_chat_line():
 
 def test_streamer_face_is_the_one_that_stays_put():
     from clipwatch.facecam import cam_box_from_face, pick_streamer_face
-    cam = (0.86, 0.27, 0.04, 0.09)
-    frames = [[cam, (0.1 + i * 0.07, 0.6, 0.05, 0.1)] for i in range(10)]  # game face moves around
+    cam = (0.86, 0.27, 0.04, 0.09, 0.9)
+    frames = [[cam, (0.1 + i * 0.07, 0.6, 0.05, 0.1, 0.9)] for i in range(10)]  # game face moves around
     face = pick_streamer_face(frames)
     assert abs(face[0] - 0.86) < 0.01 and abs(face[1] - 0.27) < 0.01
     x, y, w, h = cam_box_from_face(face, 16 / 9, 1080 / 760)
@@ -104,7 +104,7 @@ def test_streamer_face_is_the_one_that_stays_put():
 
 def test_no_steady_face_means_no_split_screen():
     from clipwatch.facecam import pick_streamer_face
-    frames = [[(0.1 + i * 0.08, 0.5, 0.05, 0.1)] for i in range(10)]
+    frames = [[(0.1 + i * 0.08, 0.5, 0.05, 0.1, 0.9)] for i in range(10)]
     assert pick_streamer_face(frames) is None
     assert pick_streamer_face([[] for _ in range(10)]) is None
 
@@ -113,3 +113,22 @@ def test_captions_on_the_seam():
     words = [Word(0, 0.3, "hi")]
     ass = build_ass(words, center_y=760)
     assert r"{\pos(540,760)}" in ass and ",7,3,5,60,60," in ass
+
+
+def test_remembered_webcam_spot_beats_a_still_game_face():
+    from clipwatch.facecam import pick_streamer_face
+    game = (0.45, 0.6, 0.06, 0.12, 0.95)  # in every frame, not moving
+    streamer = (0.08, 0.85, 0.03, 0.06, 0.8)  # bottom-left cam, visible in half the frames
+    frames = [[game, streamer] if i % 2 else [game] for i in range(16)]
+    assert pick_streamer_face(frames)[0] == 0.45  # no history: can't tell, takes the steadiest
+    assert pick_streamer_face(frames, prefer=(0.08, 0.85, 0.03, 0.06))[0] == 0.08
+
+
+def test_crop_stays_inside_picture_in_every_corner():
+    from clipwatch.facecam import cam_box_from_face
+    for cx in (0.0, 0.02, 0.5, 0.98, 1.0):
+        for cy in (0.0, 0.03, 0.5, 0.97, 1.0):
+            x, y, w, h = cam_box_from_face((cx, cy, 0.05, 0.09), 16 / 9, 1080 / 760)
+            assert 0 <= x <= 1 - w + 1e-4 and 0 <= y <= 1 - h + 1e-4
+    x, y, w, h = cam_box_from_face((0.5, 0.5, 0.4, 0.7), 16 / 9, 1080 / 760)  # full-screen cam
+    assert w <= 1 and h <= 1

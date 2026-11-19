@@ -55,7 +55,7 @@ From a terminal in the project folder (`.venv\Scripts\python -m clipwatch watch 
 | `--sensitivity 2.5` | lower = more clips (default 3 = chat 3× busier than normal) |
 | `--before 35 --after 10` | seconds kept before / after the chat spike |
 | `--cooldown 60` | minimum seconds between clips |
-| *(default)* | **split screen**: finds the streamer's webcam and puts it on top, the game below, captions on the seam. If no webcam is found, it uses `fit`. |
+| *(default)* | **split screen**: finds the streamer's webcam wherever it is (any corner, edge, the middle, or full screen) and puts it on top, the game below, captions on the seam. If no webcam is found, it uses `fit`. |
 | `--cam 0.75,0.05,0.22,0.25` | set the top crop yourself if the automatic one is off: left, top, width, height as fractions of the stream picture. Each clip folder has a `cam.txt` with the crop it used, which is a good starting point. |
 | `--layout fit` | whole picture on a blurred background |
 | `--layout crop` | zoom in to fill the screen (cuts off the sides) |
@@ -70,6 +70,7 @@ From a terminal in the project folder (`.venv\Scripts\python -m clipwatch watch 
 ```
 
 ## Good to know
+- The webcam spot is remembered per streamer (`clips\<channel>\webcam.json`), so later clips stay consistent. Delete that file if the streamer changes their layout.
 - Your computer has to stay on (and not sleep) while it watches.
 - It keeps only the last few minutes of stream on disk, so it doesn't fill your drive.
 - With an NVIDIA graphics card, captions are much faster. Without one it still works, just slower.

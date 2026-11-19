@@ -23,6 +23,7 @@ class EditOptions:
     whisper_model: str = "small"
     device: str = "auto"
     font: str = "Arial"
+    cam_memory: Path | None = None  # file remembering where this channel's webcam was last time
 
 
 def parse_cam(text: str) -> tuple[float, float, float, float]:
@@ -85,7 +86,8 @@ def make_short(source: Path, start: float, duration: float, out_dir: Path, opts:
         from .tools import video_size
         fw, fh = video_size(str(first_input))
         log("[edit] looking for the streamer's webcam")
-        cam = detect_cam(_input_args(source, start, duration), duration, fw / fh, W / CAM_H, log)
+        cam = detect_cam(_input_args(source, start, duration), duration, fw / fh, W / CAM_H, log,
+                         memory=opts.cam_memory)
         if cam:
             log(f"[edit] split screen: webcam found at {','.join(str(v) for v in cam)} "
                 "(if the top crop is off, set it yourself with --cam)")
