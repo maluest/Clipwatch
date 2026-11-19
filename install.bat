@@ -1,0 +1,41 @@
+@echo off
+REM One-time setup for clipwatch on Windows. Double-click this file.
+cd /d "%~dp0"
+
+set NEED_RESTART=0
+where py >nul 2>nul
+if errorlevel 1 (
+    echo Installing Python...
+    winget install -e --id Python.Python.3.12 --accept-package-agreements --accept-source-agreements
+    set NEED_RESTART=1
+)
+where ffmpeg >nul 2>nul
+if errorlevel 1 (
+    echo Installing FFmpeg...
+    winget install -e --id Gyan.FFmpeg --accept-package-agreements --accept-source-agreements
+    set NEED_RESTART=1
+)
+if "%NEED_RESTART%"=="1" (
+    echo.
+    echo Python/FFmpeg were just installed. Close this window and double-click install.bat again.
+    pause
+    exit /b
+)
+
+if not exist .venv (
+    echo Creating a private Python environment...
+    py -3 -m venv .venv || goto :fail
+)
+echo Installing clipwatch and its parts (a few minutes the first time)...
+.venv\Scripts\python -m pip install --upgrade pip >nul
+.venv\Scripts\python -m pip install -e . || goto :fail
+
+echo.
+echo All set! Double-click clip.bat to start clipping a stream.
+pause
+exit /b
+
+:fail
+echo.
+echo Something went wrong above. Copy the error and ask for help.
+pause

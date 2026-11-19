@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clipwatch"
+version = "0.1.0"
+description = "Watches a live stream (Twitch, YouTube, Kick), cuts a clip when chat goes crazy, and edits it into a vertical short."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "yt-dlp>=2026.10.26",
+    "faster-whisper>=1.2.1",
+    "chat-downloader>=0.2.8",
+    "curl_cffi>=0.17.0",
+    "websocket-client>=1.9.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+clipwatch = "clipwatch.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["clipwatch*"]
