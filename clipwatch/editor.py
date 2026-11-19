@@ -83,8 +83,9 @@ def make_short(source: Path, start: float, duration: float, out_dir: Path, opts:
             wav = out_dir / "audio.wav"
             _run([ff, "-y", "-hide_banner", "-loglevel", "error", *_input_args(source, start, duration),
                   "-vn", "-ac", "1", "-ar", "16000", str(wav)], out_dir)
-            log("[edit] writing captions")
+            log("[edit] writing captions (listening to the clip)")
             words = cap.transcribe(wav, opts.whisper_model, opts.device, log)
+            log(f"[edit] captions done ({len(words)} words)")
             wav.unlink(missing_ok=True)
         (out_dir / "captions.ass").write_text(cap.build_ass(words, W, H, opts.font), encoding="utf-8")
         (out_dir / "transcript.txt").write_text(" ".join(w.text for w in words) + "\n", encoding="utf-8")

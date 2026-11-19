@@ -102,24 +102,39 @@ class Recorder:
         seen = 0
         while not self._stop.is_set():
             if csv.exists():
-                lines = csv.read_text(encoding="utf-8", errors="replace").splitlines()
+                text = csv.read_text(encoding="utf-8", errors="replace")
+                # only finished lines: ffmpeg may be halfway through writing the last one
+                lines = text.split("\n")[:-1]
+                new = []
                 for line in lines[seen:]:
-                    m = re.match(r"^(.+),([\d.]+),([\d.]+)$", line.strip())
-                    if not m:
-                        continue
-                    name, s, e = m.group(1), float(m.group(2)), float(m.group(3))
-                    if self._anchor is None:
-                        self._anchor = time.time() - e
-                        self.log("[record] stream is recording")
-                    seg = Segment(self.workdir / name, self._anchor + s, self._anchor + e)
+                    m = re.match(r"^(.+),(-?[\d.e+-]+),(-?[\d.e+-]+)$", line.strip())
+                    if m:
+                        new.append((m.group(1), float(m.group(2)), float(m.group(3))))
+                seen = len(lines)
+                # Timing comes from this computer's clock, not the stream's own timestamps:
+                # Twitch ad breaks and reconnects make stream timestamps jump or restart.
+                now = time.time()
+                end = now
+                timed = []
+                for name, s, e in reversed(new):
+                    dur = min(max(e - s, 0.0), 30.0)
+                    timed.append((name, end - dur, end))
+                    end -= dur
+                for name, start, end in reversed(timed):
                     with self._lock:
+                        if self.segments:
+                            start = max(start, self.segments[-1].end)
+                            end = max(end, start)
+                        seg = Segment(self.workdir / name, start, end)
                         self.segments.append(seg)
+                    if self._anchor is None:
+                        self._anchor = start
+                        self.log("[record] stream is recording")
                     if self.on_segment:
                         try:
                             self.on_segment(seg)
                         except Exception as ex:  # noqa: BLE001
                             self.log(f"[record] segment hook failed: {ex}")
-                seen = len(lines)
             self._cleanup()
             if all(p.poll() is not None for p in self._procs):
                 code = self._procs[-1].returncode

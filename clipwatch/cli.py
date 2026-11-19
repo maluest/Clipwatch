@@ -93,8 +93,13 @@ def cmd_watch(a) -> int:
     def process(spike: Spike) -> None:
         nonlocal clip_count
         t0, t1 = spike.time - a.before, spike.time + a.after
-        # wait until the recording has caught up past the end of the moment
+        # wait until the recording has caught up past the end of the moment (but never forever)
+        log(f"[clip] recording {a.after:.0f}s more after the spike...")
+        give_up = time.time() + a.after + 60
         while rec.latest_time() < t1 and not rec.finished.is_set() and not stop.is_set():
+            if time.time() > give_up:
+                log("[clip] the recording fell behind; using what's recorded so far")
+                break
             time.sleep(0.5)
         found = rec.pieces_for(t0, t1)
         if not found:
@@ -115,6 +120,7 @@ def cmd_watch(a) -> int:
             shutil.copy2(p, dst)
             copies.append(dst)
         listing = write_concat_list(copies, raw_dir / "list.txt")
+        log(f"[clip] cutting {duration:.0f}s of video")
         try:
             out = make_short(listing, offset, duration, clip_dir, opts, log=log)
         except Exception as e:  # noqa: BLE001

@@ -20,7 +20,8 @@ def transcribe(wav: Path, model_name: str = "small", device: str = "auto", log=p
 
     key = (model_name, device)
     if key not in _model_cache:
-        log(f"[captions] loading speech model '{model_name}' (first time downloads it, ~0.5 GB for small)")
+        log(f"[captions] loading speech model '{model_name}'. The FIRST time this downloads ~0.5 GB, "
+            "which can take several minutes. Later clips skip this.")
         if device == "auto":
             try:
                 _model_cache[key] = WhisperModel(model_name, device="cuda", compute_type="float16")
