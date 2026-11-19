@@ -37,6 +37,18 @@ echo Installing clipwatch and its parts (a few minutes the first time)...
 .venv\Scripts\python -m pip install --upgrade pip >nul
 .venv\Scripts\python -m pip install --upgrade -e . || goto :fail
 
+if not exist anthropic_key.txt (
+    echo.
+    echo Claude writes the hook title, post caption and hashtags for each clip.
+    echo Paste your Anthropic API key ^(from console.anthropic.com, starts with sk-ant-^)
+    echo or just press Enter to skip ^(clips are then made without hooks^):
+    set /p ANTHROPIC_KEY_INPUT=API key: 
+)
+if not exist anthropic_key.txt if not "%ANTHROPIC_KEY_INPUT%"=="" (
+    > anthropic_key.txt echo %ANTHROPIC_KEY_INPUT%
+    echo Saved in anthropic_key.txt
+)
+
 echo.
 echo All set! Double-click clip.bat to start clipping a stream.
 pause

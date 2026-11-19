@@ -22,6 +22,7 @@ from .camtracker import CamTracker
 from .chat import ReplayChat, make_chat_reader
 from .detector import AudioSpikeDetector, ChatSpikeDetector, Spike
 from .editor import CAM_H, W, EditOptions, make_short, parse_cam
+from .hooks import write_hook
 from .platforms import Stream, parse_stream_url
 from .recorder import Recorder, check_live, mean_volume_db, write_concat_list
 
@@ -38,6 +39,15 @@ def _edit_options(a) -> EditOptions:
         whisper_model=a.model,
         device=a.device,
     )
+
+
+def _hook_fn(a, streamer: str, stream_title: str, chat: list[str]):
+    if a.no_hook:
+        return None
+
+    def fn(input_args, duration, transcript):
+        return write_hook(input_args, duration, transcript, chat, streamer, stream_title, a.hook_effort, log)
+    return fn
 
 
 def _suggest_title(lines: list[str]) -> str:
@@ -91,6 +101,7 @@ def cmd_watch(a) -> int:
 
     stop = threading.Event()
 
+    stream_title = ""
     worker_done = threading.Event()
 
     def process(spike: Spike) -> None:
@@ -130,7 +141,8 @@ def cmd_watch(a) -> int:
             if box:
                 log("[edit] split screen with the locked webcam frame")
                 clip_opts = replace(opts, cam=box, layout="facecam")
-            out = make_short(listing, offset, duration, clip_dir, clip_opts, log=log)
+            out = make_short(listing, offset, duration, clip_dir, clip_opts, log=log,
+                             hook_fn=_hook_fn(a, stream.channel, stream_title, spike.messages))
         except Exception as e:  # noqa: BLE001
             log(f"[clip] editing failed: {e}")
             return
@@ -162,6 +174,7 @@ def cmd_watch(a) -> int:
     if not a.source_file:
         log("Checking the stream is live...")
         title = check_live(stream.url, stream.platform)
+        stream_title = title
         log(f"Live: {title}")
     log(f"Watching {stream.platform}: {stream.url}")
     log(f"Clips will be saved in: {out_root.resolve()}")
@@ -224,7 +237,8 @@ def cmd_edit(a) -> int:
         total = float(probe(str(src))["format"]["duration"])
         a.duration = max(0.1, total - a.start)
     out_dir = Path(a.out) if a.out else src.with_name(src.stem + "_short")
-    out = make_short(src, a.start, a.duration, out_dir, opts, log=log)
+    out = make_short(src, a.start, a.duration, out_dir, opts, log=log,
+                     hook_fn=_hook_fn(a, a.streamer or "", "", []))
     log(f"✅ saved {out}")
     return 0
 
@@ -237,7 +251,12 @@ def _add_edit_args(p) -> None:
                         "crop = fill the screen")
     p.add_argument("--cam", help="top-panel crop instead of auto-detecting: fractions x,y,width,height of the stream picture (e.g. 0.75,0.05,0.22,0.25)")
     p.add_argument("--no-captions", action="store_true", help="don't add captions")
-    p.add_argument("--model", default="small", help="speech model: tiny, base, small (default), medium, large-v3")
+    p.add_argument("--model", default="auto",
+                   help="speech model: auto (default: large-v3-turbo on an NVIDIA GPU, small on the CPU), "
+                        "tiny, base, small, medium, large-v3-turbo, large-v3")
+    p.add_argument("--no-hook", action="store_true", help="don't have Claude write a hook title / post caption")
+    p.add_argument("--hook-effort", default="medium", choices=["low", "medium", "high", "xhigh", "max"],
+                   help="how hard Claude thinks about the hook (default medium; higher = better but costs more)")
     p.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
 
 
@@ -272,6 +291,7 @@ def main(argv: list[str] | None = None) -> None:
     e.add_argument("--start", type=float, default=0, help="start time in seconds")
     e.add_argument("--duration", type=float, help="length in seconds (default: to the end)")
     e.add_argument("--out", help="output folder")
+    e.add_argument("--streamer", help="streamer's name, for the hook")
     _add_edit_args(e)
     e.set_defaults(func=cmd_edit)
 
