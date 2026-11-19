@@ -152,6 +152,10 @@ def make_short(source: Path, start: float, duration: float, out_dir: Path, opts:
         log("[edit] writing captions (listening to the clip)")
         words = cap.transcribe(wav, opts.whisper_model, opts.device, log, hint=opts.speech_hint)
         log(f"[edit] captions done ({len(words)} words)")
+        from .sync import check_and_fix
+        words, report = check_and_fix(words, wav, log)
+        if report:
+            (out_dir / "sync.json").write_text(json.dumps(report.__dict__), encoding="utf-8")
         wav.unlink(missing_ok=True)
     if not (opts.captions and audio):
         words = []

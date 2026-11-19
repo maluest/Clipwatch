@@ -66,8 +66,21 @@ def _load(model_name: str, device: str, log):
     return _model_cache[key]
 
 
+def load_wav(wav: Path):
+    """The 16 kHz mono 16-bit WAV clipwatch writes, as float32 samples. Read directly
+    (not via faster-whisper's decoder, which breaks with newer PyAV releases)."""
+    import wave
+
+    import numpy as np
+    with wave.open(str(wav), "rb") as f:
+        if f.getnchannels() != 1 or f.getsampwidth() != 2 or f.getframerate() != 16000:
+            raise ValueError("expected 16 kHz mono 16-bit audio")
+        data = f.readframes(f.getnframes())
+    return np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+
+
 def _run(model, wav: Path, hint: str = "") -> list[Word]:
-    segments, _info = model.transcribe(str(wav), word_timestamps=True, vad_filter=True,
+    segments, _info = model.transcribe(load_wav(wav), word_timestamps=True, vad_filter=True,
                                        condition_on_previous_text=False,
                                        initial_prompt=hint or None)
     words: list[Word] = []
