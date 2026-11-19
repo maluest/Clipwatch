@@ -21,7 +21,7 @@ If it can't read chat (for example, Kick changed something), it falls back to **
 1. Download this project: on GitHub, click the green **Code** button, then **Download ZIP**, and unzip it somewhere such as `Documents\clipwatch`.
 2. Double-click **`install.bat`**. It installs Python, FFmpeg and Deno (needed for YouTube) if you don't have them, then everything else.
    - If it says programs were just installed, close the window and double-click `install.bat` again.
-   - At the end it asks for your **Anthropic API key** (from [console.anthropic.com](https://console.anthropic.com), pay-as-you-go, separate from a Claude subscription). Claude uses it to write each clip's hook title, post caption and hashtags. Press Enter to skip, and clips are made without hooks. The key is saved in `anthropic_key.txt` in this folder; delete that file to change it.
+   - For hook titles, install **Claude Code** once and log in with your Claude subscription (no API key needed). In a normal (not administrator) PowerShell window run `irm https://claude.ai/install.ps1 | iex`, close and reopen PowerShell, run `claude` and log in, then run `install.bat` again. It checks the login for you (or run `.venv\Scripts\python -m clipwatch check-claude`).
    - Got a newer version of clipwatch? Run `install.bat` again to update.
 
 ## Use it
@@ -51,12 +51,12 @@ The first clip takes longer because the speech-to-text model (about 0.5 GB) down
 
 ## Hook titles (Claude)
 
-For every clip, Claude (Opus 5.5) looks at 6 frames from across the clip, the transcript and how chat reacted, works out what actually happened, and writes:
+For every clip, Claude (Opus) looks at 6 frames from across the clip, the transcript and how chat reacted, works out what actually happened, and writes:
 - a **hook title**, shown big for the **first 3 seconds** (no captions under it), with the key word in yellow,
 - a **post caption** and **hashtags** (`post.txt`),
 - a one-line **summary** (`hook.json`).
 
-It costs roughly 5–7 cents per clip on your Anthropic account. If there's no key, no internet, or Claude declines, the clip is still made, just without a hook.
+It runs through **Claude Code on your Claude subscription**: no API key and no extra cost, but it uses your plan's usage limits like your other Claude use. If you hit the limit, or Claude Code isn't installed or logged in, the clip is still made, just without a hook. (Advanced: without Claude Code, an `ANTHROPIC_API_KEY` or `anthropic_key.txt` is used instead, billed per use.)
 
 ## Options
 
@@ -74,7 +74,6 @@ From a terminal in the project folder (`.venv\Scripts\python -m clipwatch watch 
 | `--no-captions` | skip captions (faster) |
 | `--model small` | speech model. Default `auto`: `large-v3-turbo` on an NVIDIA card (most accurate words and timing), `small` without one |
 | `--no-hook` | don't ask Claude for a hook / post caption |
-| `--hook-effort high` | Claude thinks harder about each hook (better, costs more; default `medium`) |
 | `--audio-too` | also clip very loud moments, even when chat is working |
 | `--quality "best[height<=720]/best"` | lower quality if your internet is slow |
 

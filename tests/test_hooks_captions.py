@@ -82,11 +82,13 @@ def test_write_hook_without_key_is_skipped(monkeypatch, tmp_path):
     from clipwatch import hooks
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr(hooks, "KEY_FILE", tmp_path / "none.txt")
+    monkeypatch.setattr(hooks, "claude_code_exe", lambda: None)
     assert hooks.write_hook([], 10, "", [], "joe", log=lambda m: None) is None
 
 
-def test_write_hook_parses_claudes_answer(monkeypatch, tmp_path):
+def test_api_key_route_when_claude_code_missing(monkeypatch, tmp_path):
     from clipwatch import hooks
+    monkeypatch.setattr(hooks, "claude_code_exe", lambda: None)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     monkeypatch.setattr(hooks, "grab_frames", lambda *a: [])
     answer = {"summary": "Two NPCs wake up cuddling after a bar fight.",
@@ -116,3 +118,72 @@ def test_write_hook_parses_claudes_answer(monkeypatch, tmp_path):
     assert sent["output_config"]["format"]["type"] == "json_schema"
     user_text = sent["messages"][0]["content"][-1]["text"]
     assert "little morning cuddle" in user_text and "KEKW" in user_text and "joe_bartolozzi" in user_text
+
+
+FAKE_CLAUDE = """#!/usr/bin/env python3
+import json, os, sys
+prompt = sys.stdin.read()
+log = {"argv": sys.argv[1:], "cwd": os.getcwd(), "files": sorted(os.listdir(".")),
+       "has_key": "ANTHROPIC_API_KEY" in os.environ, "prompt": prompt}
+open(os.environ["FAKE_CLAUDE_LOG"], "w").write(json.dumps(log))
+mode = os.environ.get("FAKE_CLAUDE_MODE", "ok")
+if mode == "limit":
+    print(json.dumps({"type": "result", "subtype": "success", "is_error": True,
+                      "result": "Claude usage limit reached. Your limit will reset at 5pm"}))
+elif mode == "text":
+    print(json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                      "result": 'Here you go: {"summary": "s", "hook": "Joe got jumped in GTA 6.", "emphasis": "jumped", "caption": "c", "hashtags": ["gta6"]}'}))
+else:
+    print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "",
+                      "structured_output": {"summary": "s", "hook": "Joe wasn't ready for this GTA 6 scene",
+                                            "emphasis": "ready", "caption": "c", "hashtags": ["#gta6", "joe"]}}))
+"""
+
+
+def _fake_claude(monkeypatch, tmp_path, mode="ok"):
+    from clipwatch import hooks
+    exe = tmp_path / "claude"
+    exe.write_text(FAKE_CLAUDE)
+    exe.chmod(0o755)
+    log = tmp_path / "call.json"
+    monkeypatch.setenv("FAKE_CLAUDE_LOG", str(log))
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", mode)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-should-not-be-used")
+    monkeypatch.setattr(hooks, "claude_code_exe", lambda: str(exe))
+
+    def frames(input_args, duration, outdir):
+        out = []
+        for i in range(3):
+            f = outdir / f"h_{i:02d}.jpg"
+            f.write_bytes(b"jpg")
+            out.append(f)
+        return out
+    monkeypatch.setattr(hooks, "grab_frames", frames)
+    return hooks, log
+
+
+def test_subscription_route_via_claude_code(monkeypatch, tmp_path):
+    hooks, log = _fake_claude(monkeypatch, tmp_path)
+    out = hooks.write_hook([], 45, "[0:00] bro", ["KEKW"], "joe_bartolozzi", log=lambda m: None)
+    assert out["hook"] == "Joe wasn't ready for this GTA 6 scene"
+    assert out["hashtags"] == ["#gta6", "#joe"]
+    call = json.loads(log.read_text())
+    argv = call["argv"]
+    assert "-p" in argv and argv[argv.index("--model") + 1] == "opus"
+    assert argv[argv.index("--tools") + 1] == "Read" and "--json-schema" in argv
+    assert call["has_key"] is False, "the API key must not be passed, so the subscription is used"
+    assert call["files"] == ["h_00.jpg", "h_01.jpg", "h_02.jpg"]  # runs inside the frames folder
+    assert "h_00.jpg" in call["prompt"] and "KEKW" in call["prompt"] and "THE HOOK" in call["prompt"]
+
+
+def test_subscription_usage_limit_means_no_hook(monkeypatch, tmp_path):
+    hooks, _ = _fake_claude(monkeypatch, tmp_path, "limit")
+    msgs = []
+    assert hooks.write_hook([], 45, "", [], "joe", log=msgs.append) is None
+    assert any("usage limit" in m for m in msgs)
+
+
+def test_answer_as_plain_text_json_is_still_read(monkeypatch, tmp_path):
+    hooks, _ = _fake_claude(monkeypatch, tmp_path, "text")
+    out = hooks.write_hook([], 45, "", [], "joe", log=lambda m: None)
+    assert out["hook"] == "Joe got jumped in GTA 6"

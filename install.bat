@@ -37,16 +37,19 @@ echo Installing clipwatch and its parts (a few minutes the first time)...
 .venv\Scripts\python -m pip install --upgrade pip >nul
 .venv\Scripts\python -m pip install --upgrade -e . || goto :fail
 
-if not exist anthropic_key.txt (
-    echo.
-    echo Claude writes the hook title, post caption and hashtags for each clip.
-    echo Paste your Anthropic API key ^(from console.anthropic.com, starts with sk-ant-^)
-    echo or just press Enter to skip ^(clips are then made without hooks^):
-    set /p ANTHROPIC_KEY_INPUT=API key: 
-)
-if not exist anthropic_key.txt if not "%ANTHROPIC_KEY_INPUT%"=="" (
-    > anthropic_key.txt echo %ANTHROPIC_KEY_INPUT%
-    echo Saved in anthropic_key.txt
+echo.
+where claude >nul 2>nul
+if errorlevel 1 (
+    echo Claude writes each clip's hook title, caption and hashtags using YOUR Claude subscription,
+    echo through Claude Code. It isn't installed yet. To set it up:
+    echo   1. Open PowerShell ^(normal, not as administrator^) and run:
+    echo        irm https://claude.ai/install.ps1 ^| iex
+    echo   2. Close and reopen PowerShell, run:  claude   and log in with your Claude account.
+    echo   3. Run install.bat again.
+    echo Until then, clips are made without hooks.
+) else (
+    echo Checking Claude Code is logged in...
+    .venv\Scripts\python -m clipwatch check-claude
 )
 
 echo.

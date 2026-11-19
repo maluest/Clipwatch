@@ -22,7 +22,7 @@ from .camtracker import CamTracker
 from .chat import ReplayChat, make_chat_reader
 from .detector import AudioSpikeDetector, ChatSpikeDetector, Spike
 from .editor import CAM_H, W, EditOptions, make_short, parse_cam
-from .hooks import write_hook
+from .hooks import check_claude_code, write_hook
 from .platforms import Stream, parse_stream_url
 from .recorder import Recorder, check_live, mean_volume_db, write_concat_list
 
@@ -294,6 +294,9 @@ def main(argv: list[str] | None = None) -> None:
     e.add_argument("--streamer", help="streamer's name, for the hook")
     _add_edit_args(e)
     e.set_defaults(func=cmd_edit)
+
+    c = sub.add_parser("check-claude", help="test that Claude Code is installed and logged in (for hooks)")
+    c.set_defaults(func=lambda _a: 0 if check_claude_code(log) else 1)
 
     a = ap.parse_args(argv)
     if a.cmd == "watch" and not a.url and not a.source_file:

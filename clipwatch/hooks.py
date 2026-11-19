@@ -5,21 +5,29 @@ streamer's face, in-game subtitles), the transcript with timings, and how chat r
 It writes the on-screen hook (first 3 seconds), the caption to post with the clip,
 hashtags, and a one-line summary.
 
-Needs an Anthropic API key: either the ANTHROPIC_API_KEY environment variable, or a
-file called anthropic_key.txt in the clipwatch folder (install.bat creates it).
+How Claude is reached, in order:
+1. Claude Code (the `claude` command) logged in with your Claude subscription. No API
+   key, no extra cost; it uses your plan's usage limits. This is the default.
+2. Only if Claude Code isn't installed: an Anthropic API key (ANTHROPIC_API_KEY or
+   anthropic_key.txt in the clipwatch folder), billed per use.
 """
 from __future__ import annotations
 
 import base64
 import json
 import os
+import re
+import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 from .tools import ffmpeg_exe
 
-MODEL = "claude-opus-5-5"
+MODEL = "claude-opus-5-5"  # API route
+CLAUDE_CODE_MODEL = "opus"  # Claude Code route (alias for the current Opus)
+CLAUDE_CODE_TIMEOUT = 300
 FRAMES = 6
 KEY_FILE = Path(__file__).resolve().parent.parent / "anthropic_key.txt"
 
@@ -98,35 +106,106 @@ def _clean_hook(text: str) -> str:
     return text.rstrip(".")
 
 
-def write_hook(input_args: list[str], duration: float, transcript: str, chat: list[str],
-               streamer: str, stream_title: str = "", effort: str = "medium", log=print) -> dict | None:
-    """Returns {"summary", "hook", "emphasis", "caption", "hashtags"}, or None if it couldn't."""
-    key = api_key()
-    if not key:
-        log("[hook] no Anthropic API key (anthropic_key.txt): making the clip without a hook")
-        return None
-    import anthropic
-
-    try:
-        with tempfile.TemporaryDirectory(prefix="clipwatch_hook_") as tmp:
-            frames = grab_frames(input_args, duration, Path(tmp))
-            content = []
-            for i, f in enumerate(frames):
-                content.append({"type": "text", "text": f"Frame {i + 1} of {len(frames)}:"})
-                content.append({"type": "image", "source": {
-                    "type": "base64", "media_type": "image/jpeg",
-                    "data": base64.standard_b64encode(f.read_bytes()).decode()}})
-        chat_text = "\n".join(c for c in chat[-40:] if c.strip()) or "(no chat captured)"
-        content.append({"type": "text", "text": (
-            f"Streamer: {streamer}\n"
+def _context(duration: float, transcript: str, chat: list[str], streamer: str, stream_title: str) -> str:
+    chat_text = "\n".join(c for c in chat[-40:] if c.strip()) or "(no chat captured)"
+    return (f"Streamer: {streamer}\n"
             + (f"Stream title: {stream_title}\n" if stream_title else "")
             + f"Clip length: {duration:.0f} seconds\n\n"
             f"Transcript of the streamer (timestamps from the start of the clip):\n{transcript or '(nothing said)'}\n\n"
-            f"Chat when it exploded:\n{chat_text}"
-        )})
+            f"Chat when it exploded:\n{chat_text}")
 
+
+def _finish(out: dict, log, note: str = "") -> dict | None:
+    out["hook"] = _clean_hook(str(out.get("hook", "")))
+    out["emphasis"] = str(out.get("emphasis", ""))
+    out["caption"] = str(out.get("caption", ""))
+    out["summary"] = str(out.get("summary", ""))
+    out["hashtags"] = ["#" + str(h).lstrip("#").replace(" ", "") for h in out.get("hashtags", []) if str(h).strip()]
+    if not out["hook"]:
+        log("[hook] Claude didn't return a hook: making the clip without one")
+        return None
+    log(f"[hook] \"{out['hook']}\"{note}")
+    return out
+
+
+def claude_code_exe() -> str | None:
+    return shutil.which("claude")
+
+
+def _parse_json_object(text: str) -> dict:
+    m = re.search(r"\{.*\}", text or "", re.S)
+    if not m:
+        raise ValueError("no JSON in Claude's answer")
+    return json.loads(m.group(0))
+
+
+def _via_claude_code(exe: str, frames: list[Path], context: str, log) -> dict | None:
+    """Run Claude Code headless (`claude -p`) on the user's subscription login."""
+    frame_list = "\n".join(f"- {p.name}" for p in frames)
+    prompt = (
+        SYSTEM
+        + "\n\n---\nThe frames are image files in the current folder. Use the Read tool to look at each "
+        "of them, in this order, before writing anything:\n" + frame_list
+        + "\n\n" + context
+        + "\n\nWhen done, reply with ONLY a JSON object (no other text) with exactly these keys: "
+        '"summary" (string), "hook" (string), "emphasis" (string), "caption" (string), "hashtags" (array of strings).'
+    )
+    cmd = [exe, "-p", "--model", CLAUDE_CODE_MODEL, "--output-format", "json",
+           "--tools", "Read", "--allowedTools", "Read", "--permission-mode", "dontAsk",
+           "--max-turns", "12", "--no-session-persistence"]
+    # The schema contains quotes; only pass it to a real .exe (a .cmd wrapper would mangle it).
+    if not exe.lower().endswith((".cmd", ".bat")):
+        cmd += ["--json-schema", json.dumps(SCHEMA, separators=(",", ":"))]
+    env = dict(os.environ)
+    env.pop("ANTHROPIC_API_KEY", None)  # make Claude Code use the subscription login
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+    log("[hook] Claude (via Claude Code, your subscription) is writing the hook...")
+    try:
+        r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           cwd=str(frames[0].parent) if frames else None, env=env,
+                           timeout=CLAUDE_CODE_TIMEOUT, creationflags=flags)
+    except subprocess.TimeoutExpired:
+        log("[hook] Claude Code took too long: making the clip without a hook")
+        return None
+    try:
+        data = json.loads(r.stdout)
+    except ValueError:
+        msg = (r.stderr or r.stdout or "").strip().splitlines()
+        hint = msg[-1][:200] if msg else f"exit code {r.returncode}"
+        if any(w in hint.lower() for w in ("login", "log in", "authenticat", "/login")):
+            hint += "  ->  open a terminal, run `claude` once and log in"
+        log(f"[hook] Claude Code failed: {hint}")
+        return None
+    if data.get("is_error") or data.get("subtype") not in (None, "success"):
+        detail = str(data.get("result") or data.get("subtype") or "error")[:200]
+        if "limit" in detail.lower():
+            log(f"[hook] your Claude usage limit is reached for now ({detail}): clip made without a hook")
+        else:
+            log(f"[hook] Claude Code couldn't finish: {detail}")
+        return None
+    out = data.get("structured_output")
+    if not isinstance(out, dict):
+        try:
+            out = _parse_json_object(str(data.get("result", "")))
+        except ValueError as e:
+            log(f"[hook] couldn't read Claude's answer: {e}")
+            return None
+    return _finish(out, log)
+
+
+def _via_api(key: str, frames: list[Path], context: str, effort: str, log) -> dict | None:
+    import anthropic
+
+    content = []
+    for i, f in enumerate(frames):
+        content.append({"type": "text", "text": f"Frame {i + 1} of {len(frames)}:"})
+        content.append({"type": "image", "source": {
+            "type": "base64", "media_type": "image/jpeg",
+            "data": base64.standard_b64encode(f.read_bytes()).decode()}})
+    content.append({"type": "text", "text": context})
+    log("[hook] Claude (API key) is writing the hook...")
+    try:
         client = anthropic.Anthropic(api_key=key)
-        log("[hook] Claude is writing the hook...")
         resp = client.beta.messages.create(
             model=MODEL,
             max_tokens=16000,
@@ -139,8 +218,7 @@ def write_hook(input_args: list[str], duration: float, transcript: str, chat: li
         if resp.stop_reason == "refusal":
             log("[hook] Claude declined this clip: making it without a hook")
             return None
-        text = next((b.text for b in resp.content if b.type == "text"), "")
-        out = json.loads(text)
+        out = json.loads(next((b.text for b in resp.content if b.type == "text"), ""))
     except anthropic.AuthenticationError:
         log("[hook] the Anthropic API key was rejected: check anthropic_key.txt")
         return None
@@ -156,14 +234,54 @@ def write_hook(input_args: list[str], duration: float, transcript: str, chat: li
     except anthropic.APIConnectionError:
         log("[hook] couldn't reach Anthropic (internet?): making the clip without a hook")
         return None
-    except (ValueError, subprocess.CalledProcessError) as e:
-        log(f"[hook] couldn't write a hook: {e}")
-        return None
-
-    out["hook"] = _clean_hook(out.get("hook", ""))
-    out["hashtags"] = ["#" + h.lstrip("#").replace(" ", "") for h in out.get("hashtags", []) if h.strip()]
-    if not out["hook"]:
+    except ValueError as e:
+        log(f"[hook] couldn't read Claude's answer: {e}")
         return None
     u = resp.usage
-    log(f"[hook] \"{out['hook']}\"  ({u.input_tokens} in / {u.output_tokens} out tokens)")
-    return out
+    return _finish(out, log, f"  ({u.input_tokens} in / {u.output_tokens} out tokens)")
+
+
+def write_hook(input_args: list[str], duration: float, transcript: str, chat: list[str],
+               streamer: str, stream_title: str = "", effort: str = "medium", log=print) -> dict | None:
+    """Returns {"summary", "hook", "emphasis", "caption", "hashtags"}, or None if it couldn't."""
+    exe = claude_code_exe()
+    key = None if exe else api_key()
+    if not exe and not key:
+        log("[hook] Claude Code isn't installed (and no API key): making the clip without a hook. "
+            "Install it with:  irm https://claude.ai/install.ps1 | iex   then run `claude` once to log in.")
+        return None
+    context = _context(duration, transcript, chat, streamer, stream_title)
+    with tempfile.TemporaryDirectory(prefix="clipwatch_hook_") as tmp:
+        try:
+            frames = grab_frames(input_args, duration, Path(tmp))
+        except subprocess.CalledProcessError as e:
+            log(f"[hook] couldn't take frames from the clip: {e}")
+            return None
+        if exe:
+            return _via_claude_code(exe, frames, context, log)
+        return _via_api(key, frames, context, effort, log)
+
+
+def check_claude_code(log=print) -> bool:
+    """Quick test that Claude Code is installed and logged in (uses a tiny bit of your plan)."""
+    exe = claude_code_exe()
+    if not exe:
+        log("Claude Code isn't installed. In PowerShell run:  irm https://claude.ai/install.ps1 | iex")
+        return False
+    env = dict(os.environ)
+    env.pop("ANTHROPIC_API_KEY", None)
+    r = subprocess.run([exe, "-p", "--model", CLAUDE_CODE_MODEL, "--output-format", "json", "--tools", "",
+                        "--max-turns", "1", "--no-session-persistence"],
+                       input="Reply with just the word OK.", capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", env=env, timeout=120)
+    try:
+        data = json.loads(r.stdout)
+        ok = not data.get("is_error") and "OK" in str(data.get("result", "")).upper()
+    except ValueError:
+        ok = False
+    if ok:
+        log(f"Claude Code works and is logged in ({exe}). Hooks will use your Claude subscription.")
+    else:
+        log("Claude Code is installed but didn't answer. Open a terminal, run `claude`, log in, then try again.\n"
+            + (r.stderr or r.stdout or "").strip()[-400:])
+    return ok
