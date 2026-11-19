@@ -209,6 +209,10 @@ class Recorder:
                 except OSError:
                     pass  # Windows may still have it open; next cleanup will get it
 
+    def latest_segment(self) -> Path | None:
+        with self._lock:
+            return self.segments[-1].path if self.segments else None
+
     def latest_time(self) -> float:
         with self._lock:
             return self.segments[-1].end if self.segments else 0.0

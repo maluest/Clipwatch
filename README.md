@@ -70,7 +70,7 @@ From a terminal in the project folder (`.venv\Scripts\python -m clipwatch watch 
 ```
 
 ## Good to know
-- The webcam spot is remembered per streamer (`clips\<channel>\webcam.json`), so later clips stay consistent. Delete that file if the streamer changes their layout.
+- **Webcam frame:** while it records, clipwatch checks the picture every 20 seconds. Once the streamer has been in the same spot for about 2 minutes, it **locks** a fixed frame there and uses it for every clip. Standing up, looking away or a game character on screen doesn't change it. It keeps checking: if the webcam moves to another part of the screen, it locks a new frame there; if the webcam disappears for ~5 minutes, clips use the full picture until it's back. The frame is saved in `clips\<channel>\webcam_frame.json`, so the next time you watch that streamer it's ready from the first clip. (Before the first lock, each clip looks for the webcam by itself.)
 - Your computer has to stay on (and not sleep) while it watches.
 - It keeps only the last few minutes of stream on disk, so it doesn't fill your drive.
 - With an NVIDIA graphics card, captions are much faster. Without one it still works, just slower.

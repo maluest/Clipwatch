@@ -72,11 +72,13 @@ def _same_place(a, b) -> bool:
     return abs(a[0] - b[0]) < tol_x and abs(a[1] - b[1]) < tol_y
 
 
-def pick_streamer_face(per_frame: list[list[Face]], min_share: float = 0.3, prefer=None):
-    """The face seen in the same place in the most frames (tie: more confident, then
-    closer to where this streamer's webcam was before). None if nothing is steady enough."""
+def steady_hits(per_frame: list[list[Face]], min_share: float = 0.3, prefer=None):
+    """The detections (one per frame) of the face seen in the same place in the most frames.
+    Ties: more confident. A steady face at the remembered spot (prefer) wins outright.
+    Returns None if no face is steady enough."""
     best, best_key = None, None
     n_frames = len(per_frame)
+    need = max(2, min_share * n_frames)
     for faces in per_frame:
         for cand in faces:
             hits = []
@@ -85,16 +87,51 @@ def pick_streamer_face(per_frame: list[list[Face]], min_share: float = 0.3, pref
                 if near:
                     hits.append(min(near, key=lambda f: abs(f[0] - cand[0]) + abs(f[1] - cand[1])))
             med = tuple(statistics.median(h[i] for h in hits) for i in range(5))
-            remembered = 1 if (prefer is not None and _same_place(med, (*prefer, 1.0))
-                               and len(hits) >= max(2, min_share * n_frames)) else 0
-            # A steady face at the spot where this channel's webcam was before wins outright,
-            # so a game character standing still can't take its place.
+            remembered = 1 if (prefer is not None and _same_place(med, (*prefer[:4], 1.0)) and len(hits) >= need) else 0
             key = (remembered, len(hits), statistics.mean(h[4] for h in hits))
             if best_key is None or key > best_key:
-                best, best_key = (med, len(hits)), key
-    if best is None or n_frames == 0 or best[1] < max(2, min_share * n_frames):
+                best, best_key = hits, key
+    if best is None or n_frames == 0 or len(best) < need:
         return None
-    return best[0][:4]
+    return best
+
+
+def median_face(hits):
+    return tuple(statistics.median(h[i] for h in hits) for i in range(4))
+
+
+def pick_streamer_face(per_frame: list[list[Face]], min_share: float = 0.3, prefer=None):
+    """Middle position of the steadiest face (see steady_hits), or None."""
+    hits = steady_hits(per_frame, min_share, prefer)
+    return median_face(hits) if hits else None
+
+
+def box_from_hits(hits, frame_aspect: float, panel_aspect: float, zoom: float = 3.6):
+    """A fixed frame covering everywhere the streamer's face has been, with room for
+    head and shoulders, shaped like the top panel. Used for the locked webcam frame."""
+    cx = [h[0] for h in hits]
+    cy = [h[1] for h in hits]
+    fw = statistics.median(h[2] for h in hits)
+    fh = statistics.median(h[3] for h in hits)
+    spread_x = max(cx) - min(cx)
+    spread_y = max(cy) - min(cy)
+    w = max(fw * zoom, spread_x + fw * 2.5)
+    h = w * frame_aspect / panel_aspect
+    if h < spread_y + fh * 2.5:  # moved up/down a lot: make it taller (and wider to keep the shape)
+        h = spread_y + fh * 2.5
+        w = h * panel_aspect / frame_aspect
+    if w > 1.0:
+        w = 1.0
+        h = w * frame_aspect / panel_aspect
+    if h > 1.0:
+        h = 1.0
+        w = h * panel_aspect / frame_aspect
+    mid_x = (max(cx) + min(cx)) / 2
+    x = mid_x - w / 2
+    y = (min(cy) + max(cy)) / 2 - 0.40 * h
+    x = min(max(x, 0.0), 1.0 - w)
+    y = min(max(y, 0.0), 1.0 - h)
+    return round(x, 4), round(y, 4), round(w, 4), round(h, 4)
 
 
 def cam_box_from_face(face, frame_aspect: float, panel_aspect: float, zoom: float = 3.6):

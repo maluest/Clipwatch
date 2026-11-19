@@ -14,12 +14,14 @@ import sys
 import threading
 import time
 from collections import Counter
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
+from .camtracker import CamTracker
 from .chat import ReplayChat, make_chat_reader
 from .detector import AudioSpikeDetector, ChatSpikeDetector, Spike
-from .editor import EditOptions, make_short, parse_cam
+from .editor import CAM_H, W, EditOptions, make_short, parse_cam
 from .platforms import Stream, parse_stream_url
 from .recorder import Recorder, check_live, mean_volume_db, write_concat_list
 
@@ -123,7 +125,12 @@ def cmd_watch(a) -> int:
         listing = write_concat_list(copies, raw_dir / "list.txt")
         log(f"[clip] cutting {duration:.0f}s of video")
         try:
-            out = make_short(listing, offset, duration, clip_dir, opts, log=log)
+            clip_opts = opts
+            box = tracker.current_box() if tracker else None
+            if box:
+                log("[edit] split screen with the locked webcam frame")
+                clip_opts = replace(opts, cam=box, layout="facecam")
+            out = make_short(listing, offset, duration, clip_dir, clip_opts, log=log)
         except Exception as e:  # noqa: BLE001
             log(f"[clip] editing failed: {e}")
             return
@@ -159,6 +166,10 @@ def cmd_watch(a) -> int:
     log(f"Watching {stream.platform}: {stream.url}")
     log(f"Clips will be saved in: {out_root.resolve()}")
     rec.start()
+    tracker = None
+    if opts.layout in ("auto", "facecam") and not opts.cam:
+        tracker = CamTracker(rec, W / CAM_H, memory=out_root / "webcam_frame.json", log=log)
+        tracker.start()
     if reader:
         reader.start()
     threading.Thread(target=worker, daemon=True).start()
@@ -181,6 +192,8 @@ def cmd_watch(a) -> int:
     finally:
         log("Stopping... (finishing the clip in progress)")
         rec.stop()
+        if tracker:
+            tracker.stop()
         if reader:
             reader.stop()
         # finish the clip being edited; if the stream ended by itself, also finish queued ones
