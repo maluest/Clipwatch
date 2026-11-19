@@ -1,5 +1,6 @@
 @echo off
 REM One-time setup for clipwatch on Windows. Double-click this file.
+REM Safe to run again any time (e.g. after downloading a newer version).
 cd /d "%~dp0"
 
 set NEED_RESTART=0
@@ -15,9 +16,15 @@ if errorlevel 1 (
     winget install -e --id Gyan.FFmpeg --accept-package-agreements --accept-source-agreements
     set NEED_RESTART=1
 )
+where deno >nul 2>nul
+if errorlevel 1 (
+    echo Installing Deno (needed for YouTube^)...
+    winget install -e --id DenoLand.Deno --accept-package-agreements --accept-source-agreements
+    set NEED_RESTART=1
+)
 if "%NEED_RESTART%"=="1" (
     echo.
-    echo Python/FFmpeg were just installed. Close this window and double-click install.bat again.
+    echo Some programs were just installed. Close this window and double-click install.bat again.
     pause
     exit /b
 )
@@ -28,7 +35,7 @@ if not exist .venv (
 )
 echo Installing clipwatch and its parts (a few minutes the first time)...
 .venv\Scripts\python -m pip install --upgrade pip >nul
-.venv\Scripts\python -m pip install -e . || goto :fail
+.venv\Scripts\python -m pip install --upgrade -e . || goto :fail
 
 echo.
 echo All set! Double-click clip.bat to start clipping a stream.

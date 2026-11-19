@@ -77,3 +77,15 @@ def test_parse_cam():
     assert parse_cam("0.7,0.05,0.25,0.3") == (0.7, 0.05, 0.25, 0.3)
     with pytest.raises(ValueError):
         parse_cam("0.9,0,0.5,0.5")
+
+
+def test_youtube_chat_line():
+    import json
+    from clipwatch.chat.youtube import message_text
+    line = json.dumps({"replayChatItemAction": {"actions": [{"addChatItemAction": {"item": {
+        "liveChatTextMessageRenderer": {"message": {"runs": [
+            {"text": "NO WAY "}, {"emoji": {"emojiId": "x", "shortcuts": [":skull:"]}}]}}}}}]},
+        "videoOffsetTimeMsec": "1000", "isLive": True})
+    assert message_text(line) == "NO WAY :skull:"
+    assert message_text('{"replayChatItemAction": {"actions": [{"addLiveChatTickerItemAction": {}}]}}') is None
+    assert message_text("not json") is None

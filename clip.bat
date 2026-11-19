@@ -7,7 +7,9 @@ if not exist .venv\Scripts\python.exe (
     pause
     exit /b
 )
-set /p URL=Paste the live stream link (Twitch, YouTube or Kick) and press Enter:
+REM Keep the stream downloader current - YouTube/Twitch/Kick change things often
+.venv\Scripts\python -m pip install --quiet --upgrade "yt-dlp[default]" >nul 2>nul
+set /p URL=Paste the LIVE stream link (Twitch, YouTube or Kick) and press Enter:
 .venv\Scripts\python -m clipwatch watch "%URL%" %*
 echo.
 echo Your clips are in the "clips" folder.

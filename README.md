@@ -19,12 +19,15 @@ If it can't read chat (for example, Kick changed something), it falls back to **
 ## Setup on Windows (once)
 
 1. Download this project: on GitHub, click the green **Code** button, then **Download ZIP**, and unzip it somewhere such as `Documents\clipwatch`.
-2. Double-click **`install.bat`**. It installs Python and FFmpeg if you don't have them, then everything else.
-   - If it says Python/FFmpeg were just installed, close the window and double-click `install.bat` again.
+2. Double-click **`install.bat`**. It installs Python, FFmpeg and Deno (needed for YouTube) if you don't have them, then everything else.
+   - If it says programs were just installed, close the window and double-click `install.bat` again.
+   - Got a newer version of clipwatch? Run `install.bat` again to update.
 
 ## Use it
 
 Double-click **`clip.bat`**, paste the live stream link, and press Enter. Leave it running while the stream is live. Press **Ctrl+C** to stop.
+
+The link must be a stream that is **live right now**. Normal videos and finished streams won't work; use `edit` for those (see below).
 
 Links that work:
 - `https://www.twitch.tv/streamername`
@@ -67,4 +70,4 @@ From a terminal in the project folder (`.venv\Scripts\python -m clipwatch watch 
 - Your computer has to stay on (and not sleep) while it watches.
 - It keeps only the last few minutes of stream on disk, so it doesn't fill your drive.
 - With an NVIDIA graphics card, captions are much faster. Without one it still works, just slower.
-- Twitch chat is read anonymously, so no login is needed. YouTube chat uses `chat-downloader`. Kick chat uses Kick's website chat connection, which Kick could change at any time; audio detection takes over if it breaks.
+- Twitch chat is read anonymously, so no login is needed. YouTube chat is read with yt-dlp, which `clip.bat` updates automatically each time it starts. Kick chat uses Kick's website chat connection, which Kick could change at any time; audio detection takes over if it breaks.

@@ -155,6 +155,40 @@ class Recorder:
         return [s.path for s in chosen], start - chosen[0].start, end - start
 
 
+def check_live(url: str, platform: str) -> str:
+    """Ask yt-dlp about the link before recording. Returns the stream title, or raises a clear error."""
+    import json
+    import shutil
+
+    deno_hint = ""
+    if platform == "youtube" and not shutil.which("deno"):
+        deno_hint = ("\nYouTube needs a helper program called Deno. Install it by running install.bat again "
+                     "(or: winget install DenoLand.Deno), then close and reopen this window.")
+    r = subprocess.run([sys.executable, "-m", "yt_dlp", "--no-warnings", "-J", "--playlist-items", "1", url],
+                       capture_output=True, text=True, errors="replace", stdin=subprocess.DEVNULL)
+    if r.returncode != 0:
+        err = [line for line in r.stderr.splitlines() if line.strip()]
+        msg = err[-1] if err else "unknown error"
+        if "not currently live" in msg.lower() or "is offline" in msg.lower():
+            raise RuntimeError("This channel isn't live right now. Try again when it's streaming.")
+        raise RuntimeError(f"Couldn't open the stream: {msg}{deno_hint}")
+    try:
+        info = json.loads(r.stdout)
+    except ValueError:
+        raise RuntimeError("Couldn't read the stream's details." + deno_hint) from None
+    status = info.get("live_status")
+    if status == "is_upcoming":
+        raise RuntimeError("This stream hasn't started yet (it's scheduled). Run it again once it's live.")
+    if status in ("was_live", "not_live", "post_live"):
+        raise RuntimeError(
+            "This link is a normal video or a finished stream, not a live one.\n"
+            "clipwatch 'watch' only works on streams that are live right now.\n"
+            "To make a short from a saved video, download it and use:  python -m clipwatch edit video.mp4 --start SECONDS")
+    if status != "is_live" and info.get("is_live") is not True:
+        raise RuntimeError(f"This doesn't look like a live stream (status: {status})." + deno_hint)
+    return info.get("title") or info.get("fulltitle") or url
+
+
 def write_concat_list(paths: list[Path], dest: Path) -> Path:
     with open(dest, "w", encoding="utf-8") as f:
         for p in paths:

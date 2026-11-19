@@ -21,7 +21,7 @@ from .chat import ReplayChat, make_chat_reader
 from .detector import AudioSpikeDetector, ChatSpikeDetector, Spike
 from .editor import EditOptions, make_short, parse_cam
 from .platforms import Stream, parse_stream_url
-from .recorder import Recorder, mean_volume_db, write_concat_list
+from .recorder import Recorder, check_live, mean_volume_db, write_concat_list
 
 
 def log(msg: str) -> None:
@@ -88,52 +88,67 @@ def cmd_watch(a) -> int:
 
     stop = threading.Event()
 
-    def worker() -> None:
+    worker_done = threading.Event()
+
+    def process(spike: Spike) -> None:
         nonlocal clip_count
-        while not stop.is_set():
+        t0, t1 = spike.time - a.before, spike.time + a.after
+        # wait until the recording has caught up past the end of the moment
+        while rec.latest_time() < t1 and not rec.finished.is_set() and not stop.is_set():
+            time.sleep(0.5)
+        found = rec.pieces_for(t0, t1)
+        if not found:
+            log("[clip] the moment isn't in the recording buffer, skipping")
+            return
+        paths, offset, duration = found
+        if duration < 5:
+            log("[clip] too little video for this moment, skipping")
+            return
+        stamp = datetime.fromtimestamp(spike.time).strftime("%Y-%m-%d_%H-%M-%S")
+        clip_dir = out_root / f"{stamp}_{spike.reason}_{spike.score}x"
+        raw_dir = clip_dir / "raw"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        # copy the pieces so the rolling buffer can't delete them mid-edit
+        copies = []
+        for p in paths:
+            dst = raw_dir / p.name
+            shutil.copy2(p, dst)
+            copies.append(dst)
+        listing = write_concat_list(copies, raw_dir / "list.txt")
+        try:
+            out = make_short(listing, offset, duration, clip_dir, opts, log=log)
+        except Exception as e:  # noqa: BLE001
+            log(f"[clip] editing failed: {e}")
+            return
+        if not a.keep_raw:
+            shutil.rmtree(raw_dir, ignore_errors=True)
+        info = {
+            "stream": stream.url, "platform": stream.platform, "detected_at": stamp,
+            "reason": spike.reason, "score": spike.score, "seconds": round(duration, 1),
+            "suggested_title": _suggest_title(spike.messages), "chat": spike.messages,
+        }
+        (clip_dir / "info.json").write_text(json.dumps(info, indent=2, ensure_ascii=False), encoding="utf-8")
+        clip_count += 1
+        log(f"[clip] ✅ new clip #{clip_count}: {out}")
+
+    def worker() -> None:
+        while not worker_done.is_set():
             try:
                 spike = jobs.get(timeout=0.5)
             except queue.Empty:
                 continue
-            t0, t1 = spike.time - a.before, spike.time + a.after
-            # wait until the recording has caught up past the end of the moment
-            while rec.latest_time() < t1 and not rec.finished.is_set() and not stop.is_set():
-                time.sleep(0.5)
-            found = rec.pieces_for(t0, t1)
-            if not found:
-                log("[clip] the moment isn't in the recording buffer, skipping")
-                continue
-            paths, offset, duration = found
-            if duration < 5:
-                log("[clip] too little video for this moment, skipping")
-                continue
-            stamp = datetime.fromtimestamp(spike.time).strftime("%Y-%m-%d_%H-%M-%S")
-            clip_dir = out_root / f"{stamp}_{spike.reason}_{spike.score}x"
-            raw_dir = clip_dir / "raw"
-            raw_dir.mkdir(parents=True, exist_ok=True)
-            # copy the pieces so the rolling buffer can't delete them mid-edit
-            copies = []
-            for p in paths:
-                dst = raw_dir / p.name
-                shutil.copy2(p, dst)
-                copies.append(dst)
-            listing = write_concat_list(copies, raw_dir / "list.txt")
             try:
-                out = make_short(listing, offset, duration, clip_dir, opts, log=log)
+                if not worker_done.is_set():
+                    process(spike)
             except Exception as e:  # noqa: BLE001
-                log(f"[clip] editing failed: {e}")
-                continue
-            if not a.keep_raw:
-                shutil.rmtree(raw_dir, ignore_errors=True)
-            info = {
-                "stream": stream.url, "platform": stream.platform, "detected_at": stamp,
-                "reason": spike.reason, "score": spike.score, "seconds": round(duration, 1),
-                "suggested_title": _suggest_title(spike.messages), "chat": spike.messages,
-            }
-            (clip_dir / "info.json").write_text(json.dumps(info, indent=2, ensure_ascii=False), encoding="utf-8")
-            clip_count += 1
-            log(f"[clip] ✅ new clip #{clip_count}: {out}")
+                log(f"[clip] failed: {e}")
+            finally:
+                jobs.task_done()
 
+    if not a.source_file:
+        log("Checking the stream is live...")
+        title = check_live(stream.url, stream.platform)
+        log(f"Live: {title}")
     log(f"Watching {stream.platform}: {stream.url}")
     log(f"Clips will be saved in: {out_root.resolve()}")
     rec.start()
@@ -161,12 +176,20 @@ def cmd_watch(a) -> int:
         rec.stop()
         if reader:
             reader.stop()
-        # give the worker time to finish what's queued from the recording that exists
-        deadline = time.time() + (600 if not stop.is_set() else 120)
-        while (not jobs.empty()) and time.time() < deadline:
-            time.sleep(1)
+        # finish the clip being edited; if the stream ended by itself, also finish queued ones
+        user_quit = stop.is_set()
+        if user_quit:
+            while True:
+                try:
+                    jobs.get_nowait()
+                    jobs.task_done()
+                except queue.Empty:
+                    break
+        deadline = time.time() + (900 if not user_quit else 300)
+        while jobs.unfinished_tasks and time.time() < deadline:
+            time.sleep(0.5)
+        worker_done.set()
         stop.set()
-        time.sleep(1)
         shutil.rmtree(buffer_dir, ignore_errors=True)
     log(f"Done. {clip_count} clip(s) in {out_root.resolve()}")
     return 0
