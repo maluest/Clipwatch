@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "yt-dlp[default]>=2026.10.26",
+    "streamlink>=8.6.3",
     "faster-whisper>=1.2.1",
     "curl_cffi>=0.17.0",
     "websocket-client>=1.9.2",

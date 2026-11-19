@@ -8,7 +8,7 @@ if not exist .venv\Scripts\python.exe (
     exit /b
 )
 REM Keep the stream downloader current - YouTube/Twitch/Kick change things often
-.venv\Scripts\python -m pip install --quiet --upgrade "yt-dlp[default]" >nul 2>nul
+.venv\Scripts\python -m pip install --quiet --upgrade "yt-dlp[default]" streamlink >nul 2>nul
 set /p URL=Paste the LIVE stream link (Twitch, YouTube or Kick) and press Enter:
 .venv\Scripts\python -m clipwatch watch "%URL%" %*
 echo.

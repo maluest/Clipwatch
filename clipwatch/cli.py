@@ -83,7 +83,7 @@ def cmd_watch(a) -> int:
         if spike:
             jobs.put(spike)
 
-    rec = Recorder(stream.url, buffer_dir, keep_seconds=max(240, a.before + a.after + 120),
+    rec = Recorder(stream.url, buffer_dir, platform=stream.platform, keep_seconds=max(240, a.before + a.after + 120),
                    source_file=a.source_file, quality=a.quality, on_segment=on_segment, log=log)
 
     stop = threading.Event()

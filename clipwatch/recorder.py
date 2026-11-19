@@ -1,8 +1,12 @@
 """Record a live stream into short rolling segments on disk.
 
-yt-dlp pulls the stream (Twitch / YouTube / Kick) and pipes it into ffmpeg, which cuts it
-into ~4 second .ts pieces without re-encoding. We keep the last few minutes so that when
-chat spikes we can go back and grab the moment. Older pieces are deleted.
+Twitch is pulled with Streamlink (it skips Twitch's "Commercial break in progress" ads);
+YouTube and Kick with yt-dlp. The video is piped into ffmpeg, which cuts it into ~4 second
+.ts pieces without re-encoding. We keep the last few minutes so that when chat spikes we can
+go back and grab the moment. Older pieces are deleted.
+
+If no new video arrives for a while (stalled connection, stream switched tracks...), the
+whole pipeline is restarted automatically.
 """
 from __future__ import annotations
 
@@ -19,6 +23,12 @@ from typing import Callable
 from .tools import ffmpeg_exe
 
 SEGMENT_SECONDS = 4
+STALL_SECONDS = 150  # no new video for this long -> reconnect (Twitch ad breaks can be ~2 min)
+FIRST_DATA_SECONDS = 240  # allowed wait for the very first video after (re)connecting
+MAX_FAILED_RESTARTS = 4  # reconnects in a row that produce nothing -> assume the stream ended
+
+# Streamlink quality names, best first
+TWITCH_QUALITY = "1080p60,1080p,936p60,900p60,720p60,720p,best"
 
 
 @dataclass
@@ -38,6 +48,7 @@ class Recorder:
         quality: str = "best[height<=1080]/best",
         on_segment: Callable[[Segment], None] | None = None,
         log: Callable[[str], None] = print,
+        platform: str = "",
     ):
         self.url = url
         self.workdir = Path(workdir)
@@ -46,10 +57,12 @@ class Recorder:
         self.quality = quality
         self.on_segment = on_segment
         self.log = log
+        self.platform = platform
         self.segments: list[Segment] = []
         self._lock = threading.Lock()
         self._procs: list[subprocess.Popen] = []
-        self._anchor: float | None = None
+        self._run = 0
+        self._started_recording = False
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.finished = threading.Event()
@@ -57,36 +70,42 @@ class Recorder:
     # ---- start / stop -------------------------------------------------------------
     def start(self) -> None:
         self.workdir.mkdir(parents=True, exist_ok=True)
-        for old in self.workdir.glob("seg_*.ts"):
+        for old in list(self.workdir.glob("seg*.ts")) + list(self.workdir.glob("segments*.csv")):
             old.unlink(missing_ok=True)
-        csv = self.workdir / "segments.csv"
-        csv.unlink(missing_ok=True)
+        self._launch()
+        self._thread = threading.Thread(target=self._watch, daemon=True)
+        self._thread.start()
 
+    def _csv(self) -> Path:
+        return self.workdir / f"segments_{self._run}.csv"
+
+    def _launch(self) -> None:
+        self._csv().unlink(missing_ok=True)
         seg_args = [
             "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy",
             "-f", "segment", "-segment_time", str(SEGMENT_SECONDS),
-            "-segment_list", "segments.csv", "-segment_list_type", "csv",
-            "-segment_list_flags", "+live", "seg_%06d.ts",
+            "-segment_list", self._csv().name, "-segment_list_type", "csv",
+            "-segment_list_flags", "+live", f"seg{self._run:03d}_%06d.ts",
         ]
         ff = ffmpeg_exe()
         if self.source_file:
             # Testing mode: play a local file in real time as if it were a live stream
             cmd = [ff, "-hide_banner", "-loglevel", "error", "-re", "-i", str(Path(self.source_file).resolve()), *seg_args]
-            self._procs.append(subprocess.Popen(cmd, cwd=self.workdir, stdin=subprocess.DEVNULL))
+            self._procs = [subprocess.Popen(cmd, cwd=self.workdir, stdin=subprocess.DEVNULL)]
+            return
+        if self.platform == "twitch":
+            src = [sys.executable, "-m", "streamlink", "--stdout", "--loglevel", "error",
+                   "--twitch-low-latency", "--retry-open", "3", self.url, TWITCH_QUALITY]
         else:
-            ytdlp = [sys.executable, "-m", "yt_dlp", "--quiet", "--no-warnings", "--no-part",
-                     "-f", self.quality, "-o", "-", self.url]
-            p1 = subprocess.Popen(ytdlp, stdout=subprocess.PIPE, stdin=subprocess.DEVNULL)
-            cmd = [ff, "-hide_banner", "-loglevel", "error", "-i", "pipe:0", *seg_args]
-            p2 = subprocess.Popen(cmd, cwd=self.workdir, stdin=p1.stdout)
-            p1.stdout.close()  # let ffmpeg own the pipe
-            self._procs += [p1, p2]
+            src = [sys.executable, "-m", "yt_dlp", "--quiet", "--no-warnings", "--no-part",
+                   "-f", self.quality, "-o", "-", self.url]
+        p1 = subprocess.Popen(src, stdout=subprocess.PIPE, stdin=subprocess.DEVNULL)
+        cmd = [ff, "-hide_banner", "-loglevel", "error", "-i", "pipe:0", *seg_args]
+        p2 = subprocess.Popen(cmd, cwd=self.workdir, stdin=p1.stdout)
+        p1.stdout.close()  # let ffmpeg own the pipe
+        self._procs = [p1, p2]
 
-        self._thread = threading.Thread(target=self._watch, daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop.set()
+    def _kill(self) -> None:
         for p in self._procs:
             if p.poll() is None:
                 p.terminate()
@@ -96,52 +115,87 @@ class Recorder:
             except subprocess.TimeoutExpired:
                 p.kill()
 
+    def stop(self) -> None:
+        self._stop.set()
+        self._kill()
+
     # ---- segment bookkeeping -----------------------------------------------------
+    def _read_new(self, seen: int) -> tuple[int, int]:
+        """Pick up segments ffmpeg has finished. Returns (lines seen, new segment count)."""
+        csv = self._csv()
+        if not csv.exists():
+            return seen, 0
+        text = csv.read_text(encoding="utf-8", errors="replace")
+        # only finished lines: ffmpeg may be halfway through writing the last one
+        lines = text.split("\n")[:-1]
+        new = []
+        for line in lines[seen:]:
+            m = re.match(r"^(.+),(-?[\d.e+-]+),(-?[\d.e+-]+)$", line.strip())
+            if m:
+                new.append((m.group(1), float(m.group(2)), float(m.group(3))))
+        # Timing comes from this computer's clock, not the stream's own timestamps:
+        # Twitch ad breaks and reconnects make stream timestamps jump or restart.
+        end = time.time()
+        timed = []
+        for name, s, e in reversed(new):
+            dur = min(max(e - s, 0.0), 30.0)
+            timed.append((name, end - dur, end))
+            end -= dur
+        for name, start, end in reversed(timed):
+            with self._lock:
+                if self.segments:
+                    start = max(start, self.segments[-1].end)
+                    end = max(end, start)
+                seg = Segment(self.workdir / name, start, end)
+                self.segments.append(seg)
+            if not self._started_recording:
+                self._started_recording = True
+                self.log("[record] stream is recording")
+            if self.on_segment:
+                try:
+                    self.on_segment(seg)
+                except Exception as ex:  # noqa: BLE001
+                    self.log(f"[record] segment hook failed: {ex}")
+        return len(lines), len(new)
+
     def _watch(self) -> None:
-        csv = self.workdir / "segments.csv"
         seen = 0
+        last_new = time.time()
+        got_any_this_run = False
+        failed_restarts = 0
         while not self._stop.is_set():
-            if csv.exists():
-                text = csv.read_text(encoding="utf-8", errors="replace")
-                # only finished lines: ffmpeg may be halfway through writing the last one
-                lines = text.split("\n")[:-1]
-                new = []
-                for line in lines[seen:]:
-                    m = re.match(r"^(.+),(-?[\d.e+-]+),(-?[\d.e+-]+)$", line.strip())
-                    if m:
-                        new.append((m.group(1), float(m.group(2)), float(m.group(3))))
-                seen = len(lines)
-                # Timing comes from this computer's clock, not the stream's own timestamps:
-                # Twitch ad breaks and reconnects make stream timestamps jump or restart.
-                now = time.time()
-                end = now
-                timed = []
-                for name, s, e in reversed(new):
-                    dur = min(max(e - s, 0.0), 30.0)
-                    timed.append((name, end - dur, end))
-                    end -= dur
-                for name, start, end in reversed(timed):
-                    with self._lock:
-                        if self.segments:
-                            start = max(start, self.segments[-1].end)
-                            end = max(end, start)
-                        seg = Segment(self.workdir / name, start, end)
-                        self.segments.append(seg)
-                    if self._anchor is None:
-                        self._anchor = start
-                        self.log("[record] stream is recording")
-                    if self.on_segment:
-                        try:
-                            self.on_segment(seg)
-                        except Exception as ex:  # noqa: BLE001
-                            self.log(f"[record] segment hook failed: {ex}")
+            seen, n = self._read_new(seen)
+            if n:
+                last_new = time.time()
+                got_any_this_run = True
+                failed_restarts = 0
             self._cleanup()
-            if all(p.poll() is not None for p in self._procs):
-                code = self._procs[-1].returncode
-                self.log(f"[record] stream recording stopped (ffmpeg exit code {code}). "
-                         "The stream may have ended, be offline, or need a login.")
-                self.finished.set()
-                return
+
+            dead = all(p.poll() is not None for p in self._procs)
+            if self.source_file and dead:
+                self._read_new(seen)
+                self.log("[record] test video finished")
+                break
+            waited = time.time() - last_new
+            stalled = waited > (STALL_SECONDS if got_any_this_run else FIRST_DATA_SECONDS)
+            if dead or stalled:
+                if not got_any_this_run:
+                    failed_restarts += 1
+                if failed_restarts >= MAX_FAILED_RESTARTS:
+                    self.log("[record] the stream isn't sending video any more. It has probably ended.")
+                    break
+                why = "connection dropped" if dead else f"no new video for {waited:.0f}s"
+                self.log(f"[record] {why}: reconnecting to the stream...")
+                self._kill()
+                self._read_new(seen)
+                self._run += 1
+                seen = 0
+                got_any_this_run = False
+                last_new = time.time()
+                if self._stop.wait(3 if dead else 0):
+                    break
+                self._launch()
+                continue
             self._stop.wait(0.5)
         self.finished.set()
 

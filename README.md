@@ -34,6 +34,8 @@ Links that work:
 - `https://kick.com/streamername`
 - `https://www.youtube.com/@channelname/live`, or a `youtube.com/watch?v=...` link of the live stream
 
+Twitch shows "Commercial break in progress" ads to viewers who aren't logged in. clipwatch records Twitch with Streamlink, which skips those ads, so the first minute or two may show nothing new while an ad plays. If the video ever stops arriving, it reconnects by itself.
+
 Each clip gets its own folder in `clips\<channel>\`:
 | File | What |
 |---|---|
