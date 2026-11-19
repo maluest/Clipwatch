@@ -162,6 +162,9 @@ def load_gray(path: Path, width: int = 960):
     return cv2.resize(img, (width, max(2, round(h * width / w))), interpolation=cv2.INTER_AREA)
 
 
+CUT_MARGIN = 0.008  # of the frame height, kept above the webcam's bottom edge
+
+
 def find_bottom_cut(grays, face, min_score: float = 0.85):
     """Where the webcam (or a green-screen cutout) ends below the streamer, as a fraction of
     the frame height, or None.
@@ -195,9 +198,10 @@ def find_bottom_cut(grays, face, min_score: float = 0.85):
     score = np.median(np.stack(per_frame), axis=0)  # must be there in most frames
     for y in range(y0, y1):
         if score[y - 1] >= min_score:
-            band = range(y, min(y + 6, y1))  # an edge is a few rows thick: take its sharpest row
-            best = max(band, key=lambda r: score[r - 1])
-            return max(0.0, (best - 3) / H)  # stop just above it, so no border line shows at the seam
+            # On a compressed stream the edge is blurred over several rows. Stop at the FIRST
+            # row where it begins, minus a safety margin: the top panel is enlarged ~4x, so
+            # even 5 stream pixels below the edge would show as a visible strip at the seam.
+            return max(0.0, (y - 2) / H - CUT_MARGIN)
     return None
 
 

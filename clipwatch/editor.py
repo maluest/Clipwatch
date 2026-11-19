@@ -14,6 +14,11 @@ from .facecam import detect_cam
 from .tools import ffmpeg_exe, has_audio
 
 W, H = 1080, 1920
+# Live streams have holes in the audio (skipped ad segments, dropped packets). A WAV file
+# has no timestamps, so without this the holes get squeezed out and every word after a
+# hole is heard too early: captions drift ahead of the voice. This fills holes with
+# silence (and trims overlaps) so the speech model and the finished clip share one timeline.
+AUDIO_TIMELINE = "aresample=async=1:first_pts=0"
 CAM_H = 760  # split screen: streamer panel height on top; the game fills the rest
 
 
@@ -143,7 +148,7 @@ def make_short(source: Path, start: float, duration: float, out_dir: Path, opts:
     if opts.captions and audio and words is None:
         wav = out_dir / "audio.wav"
         _run([ff, "-y", "-hide_banner", "-loglevel", "error", *_input_args(source, start, duration),
-              "-vn", "-ac", "1", "-ar", "16000", str(wav)], out_dir)
+              "-vn", "-af", AUDIO_TIMELINE, "-ac", "1", "-ar", "16000", str(wav)], out_dir)
         log("[edit] writing captions (listening to the clip)")
         words = cap.transcribe(wav, opts.whisper_model, opts.device, log, hint=opts.speech_hint)
         log(f"[edit] captions done ({len(words)} words)")
@@ -176,7 +181,7 @@ def make_short(source: Path, start: float, duration: float, out_dir: Path, opts:
     cmd = [ff, "-y", "-hide_banner", "-loglevel", "error", *_input_args(source, start, duration),
            "-filter_complex", vf, "-map", "[vout]"]
     if audio:
-        cmd += ["-map", "0:a:0", "-af", "loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000",
+        cmd += ["-map", "0:a:0", "-af", AUDIO_TIMELINE + ",loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000",
                 "-c:a", "aac", "-b:a", "160k"]
     cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-fpsmax", "60",
             "-movflags", "+faststart", str(out)]
