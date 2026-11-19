@@ -151,6 +151,72 @@ def cam_box_from_face(face, frame_aspect: float, panel_aspect: float, zoom: floa
     return round(x, 4), round(y, 4), round(w, 4), round(h, 4)
 
 
+def load_gray(path: Path, width: int = 960):
+    """A frame as a small greyscale array (for finding the webcam's bottom edge)."""
+    os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
+    import cv2
+    img = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        return None
+    h, w = img.shape[:2]
+    return cv2.resize(img, (width, max(2, round(h * width / w))), interpolation=cv2.INTER_AREA)
+
+
+def find_bottom_cut(grays, face, min_score: float = 0.85):
+    """Where the webcam (or a green-screen cutout) ends below the streamer, as a fraction of
+    the frame height, or None.
+
+    The bottom of a webcam overlay, or the line where a cutout body meets a banner, is a
+    straight, sharp horizontal edge across the whole width under the face, in the same row
+    in every frame. Body outlines, mics and chairs aren't straight across. We take the
+    FIRST such edge below the face (the top of a banner, not its bottom)."""
+    import numpy as np
+
+    grays = [g for g in grays if g is not None]
+    if not grays:
+        return None
+    H, W = grays[0].shape
+    cx, cy, fw, fh = face[:4]
+    x0 = int(max(0, (cx - 1.3 * fw) * W))
+    x1 = int(min(W, (cx + 1.3 * fw) * W))
+    y0 = int((cy + 1.0 * fh) * H)
+    y1 = int(min(H - 2, (cy + 7 * fh) * H))
+    if x1 - x0 < 8 or y1 <= y0:
+        return None
+    per_frame = []
+    for g in grays:
+        if g.shape != (H, W):
+            continue
+        a = g[:, x0:x1].astype(np.float32)
+        d = np.abs(a[2:] - a[:-2])  # value for row y is at index y-1
+        per_frame.append((d > 18).mean(axis=1))
+    if not per_frame:
+        return None
+    score = np.median(np.stack(per_frame), axis=0)  # must be there in most frames
+    for y in range(y0, y1):
+        if score[y - 1] >= min_score:
+            band = range(y, min(y + 6, y1))  # an edge is a few rows thick: take its sharpest row
+            best = max(band, key=lambda r: score[r - 1])
+            return max(0.0, (best - 3) / H)  # stop just above it, so no border line shows at the seam
+    return None
+
+
+def fit_box_to_cut(box, face, cut_y: float, frame_aspect: float, panel_aspect: float):
+    """Move the crop so its bottom sits exactly on the webcam's bottom edge, keeping the
+    panel's shape, and keeping the whole head in the picture."""
+    x, y, w, h = box
+    cx, cy, fw, fh = face[:4]
+    head_top = max(0.0, cy - 1.4 * fh)
+    if cut_y - h > head_top:  # box would start below the top of the head: make it taller (and wider)
+        h = cut_y - head_top
+    h = min(h, cut_y)
+    w = min(1.0, h * panel_aspect / frame_aspect)
+    h = w * frame_aspect / panel_aspect
+    y = max(0.0, cut_y - h)
+    x = min(max(cx - w / 2, 0.0), 1.0 - w)
+    return round(x, 4), round(y, 4), round(w, 4), round(h, 4)
+
+
 def _load_memory(path: Path | None):
     try:
         if path and path.exists():
@@ -175,12 +241,19 @@ def detect_cam(input_args: list[str], duration: float, frame_aspect: float, pane
     """memory: a small file remembering where this channel's webcam face was last time."""
     try:
         with tempfile.TemporaryDirectory(prefix="clipwatch_cam_") as tmp:
-            per_frame = find_faces(_frames(input_args, duration, Path(tmp)))
+            images = _frames(input_args, duration, Path(tmp))
+            per_frame = find_faces(images)
+            grays = [load_gray(p) for p in images]
         face = pick_streamer_face(per_frame, prefer=_load_memory(memory))
+        if face is None:
+            return None
+        _save_memory(memory, face)
+        box = cam_box_from_face(face, frame_aspect, panel_aspect)
+        cut = find_bottom_cut(grays, face)
+        if cut is not None:
+            box = fit_box_to_cut(box, face, cut, frame_aspect, panel_aspect)
+            log(f"[edit] webcam bottom edge found at {cut:.3f} of the height: top panel ends there")
+        return box
     except Exception as e:  # noqa: BLE001 - never let this break a clip
         log(f"[edit] couldn't look for the webcam: {e}")
         return None
-    if face is None:
-        return None
-    _save_memory(memory, face)
-    return cam_box_from_face(face, frame_aspect, panel_aspect)

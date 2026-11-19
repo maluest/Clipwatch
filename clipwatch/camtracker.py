@@ -22,7 +22,8 @@ import threading
 from collections import deque
 from pathlib import Path
 
-from .facecam import _same_place, box_from_hits, find_faces, median_face, steady_hits
+from .facecam import (_same_place, box_from_hits, find_bottom_cut, find_faces, fit_box_to_cut, load_gray,
+                      median_face, steady_hits)
 from .tools import ffmpeg_exe
 
 INTERVAL = 20  # seconds between checks
@@ -42,6 +43,7 @@ class CamTracker(threading.Thread):
         self.log = log
         self.interval = interval
         self.obs: deque[list] = deque(maxlen=WINDOW)
+        self.grays: deque = deque(maxlen=WINDOW)  # small greyscale frames, to find the webcam's bottom edge
         self.frame_aspect: float | None = None
         self.face = None  # locked face position (cx, cy, w, h)
         self.box = None  # locked crop (x, y, w, h)
@@ -63,7 +65,7 @@ class CamTracker(threading.Thread):
         try:
             if self.memory and self.memory.exists():
                 d = json.loads(self.memory.read_text(encoding="utf-8"))
-                if "box" in d:
+                if "box" in d and d.get("v") == 2:  # frames saved before the bottom-edge fix are re-found
                     self.face = (d["x"], d["y"], d["w"], d["h"])
                     self.box = tuple(d["box"])
                     self.log(f"[cam] using this streamer's saved webcam frame {self._fmt(self.box)} (re-checking it as we go)")
@@ -75,7 +77,7 @@ class CamTracker(threading.Thread):
             return
         try:
             x, y, w, h = self.face
-            self.memory.write_text(json.dumps({"x": x, "y": y, "w": w, "h": h, "box": list(self.box)}), encoding="utf-8")
+            self.memory.write_text(json.dumps({"v": 2, "x": x, "y": y, "w": w, "h": h, "box": list(self.box)}), encoding="utf-8")
         except OSError:
             pass
 
@@ -92,7 +94,7 @@ class CamTracker(threading.Thread):
                 self.log(f"[cam] check failed: {e}")
                 continue
             if faces is not None:
-                self.observe(faces)
+                self.observe(*faces)
 
     def _look(self):
         seg = self.rec.latest_segment()
@@ -110,11 +112,13 @@ class CamTracker(threading.Thread):
                 import cv2
                 img = cv2.imread(str(png))
                 self.frame_aspect = img.shape[1] / img.shape[0]
-            return find_faces([png])[0]
+            return find_faces([png])[0], load_gray(png)
 
-    def observe(self, faces) -> None:
-        """Feed one check's faces (list of (cx, cy, w, h, conf)). Updates the lock."""
+    def observe(self, faces, gray=None) -> None:
+        """Feed one check's faces (list of (cx, cy, w, h, conf)) and optionally the frame
+        (small greyscale). Updates the lock."""
         self.obs.append(faces)
+        self.grays.append(gray)
         aspect = self.frame_aspect or 16 / 9
         with self._lock:
             if self.face is not None:
@@ -141,6 +145,10 @@ class CamTracker(threading.Thread):
     def _set(self, hits, aspect, msg) -> None:
         self.face = median_face(hits)
         self.box = box_from_hits(hits, aspect, self.panel_aspect)
+        cut = find_bottom_cut([g for g in self.grays if g is not None], self.face)
+        if cut is not None:
+            self.box = fit_box_to_cut(self.box, self.face, cut, aspect, self.panel_aspect)
         self.misses = 0
-        self.log(f"[cam] {msg} {self._fmt(self.box)}")
+        edge = f", ending at the webcam's bottom edge ({cut:.3f})" if cut is not None else ""
+        self.log(f"[cam] {msg} {self._fmt(self.box)}{edge}")
         self._save()
