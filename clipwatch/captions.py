@@ -66,9 +66,10 @@ def _load(model_name: str, device: str, log):
     return _model_cache[key]
 
 
-def _run(model, wav: Path) -> list[Word]:
+def _run(model, wav: Path, hint: str = "") -> list[Word]:
     segments, _info = model.transcribe(str(wav), word_timestamps=True, vad_filter=True,
-                                       condition_on_previous_text=False)
+                                       condition_on_previous_text=False,
+                                       initial_prompt=hint or None)
     words: list[Word] = []
     for seg in segments:
         for w in seg.words or []:
@@ -78,19 +79,20 @@ def _run(model, wav: Path) -> list[Word]:
     return words
 
 
-def transcribe(wav: Path, model_name: str = "auto", device: str = "auto", log=print) -> list[Word]:
-    """model_name 'auto' = large-v3-turbo on an NVIDIA GPU, small on the CPU."""
+def transcribe(wav: Path, model_name: str = "auto", device: str = "auto", log=print, hint: str = "") -> list[Word]:
+    """model_name 'auto' = large-v3-turbo on an NVIDIA GPU, small on the CPU.
+    hint: names and words likely to be said (streamer, game), so they're spelled right."""
     if device in ("auto", "cuda"):
         _add_cuda_dlls()
         try:
-            return _run(_load(GPU_MODEL if model_name == "auto" else model_name, "cuda", log), wav)
+            return _run(_load(GPU_MODEL if model_name == "auto" else model_name, "cuda", log), wav, hint)
         except Exception as e:  # noqa: BLE001 - no usable GPU: fall back to the CPU
             if device == "cuda":
                 raise
             if not _model_cache.get(("_warned",)):
                 _model_cache[("_warned",)] = True
                 log(f"[captions] NVIDIA GPU not usable ({str(e).splitlines()[0][:120]}); using the CPU instead")
-    return _run(_load(CPU_MODEL if model_name == "auto" else model_name, "cpu", log), wav)
+    return _run(_load(CPU_MODEL if model_name == "auto" else model_name, "cpu", log), wav, hint)
 
 
 # ---------------------------------------------------------------- captions ------------
@@ -131,11 +133,13 @@ def group_words(words: list[Word], max_words: int = MAX_WORDS, max_chars: int = 
 
 
 def _ts(t: float) -> str:
-    t = max(0.0, t)
-    h = int(t // 3600)
-    m = int(t % 3600 // 60)
-    s = t % 60
-    return f"{h}:{m:02d}:{s:05.2f}"
+    """ASS time h:mm:ss.cc. Rounded to whole centiseconds first, so 59.996 becomes
+    0:01:00.00 (not the invalid 0:00:60.00)."""
+    cs = int(round(max(0.0, t) * 100))
+    h, cs = divmod(cs, 360000)
+    m, cs = divmod(cs, 6000)
+    sec, cs = divmod(cs, 100)
+    return f"{h}:{m:02d}:{sec:02d}.{cs:02d}"
 
 
 def caption_events(words: list[Word], skip_until: float = 0.0, linger: float = 0.4) -> list[tuple[float, float, str]]:

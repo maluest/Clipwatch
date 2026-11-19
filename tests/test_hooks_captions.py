@@ -198,3 +198,35 @@ def test_finds_claude_code_in_installer_folder_when_not_on_path(monkeypatch, tmp
     exe.parent.mkdir(parents=True)
     exe.write_bytes(b"")
     assert hooks.claude_code_exe() == str(exe)
+
+
+def test_caption_times_never_invalid():
+    from clipwatch.captions import _ts
+    assert _ts(59.996) == "0:01:00.00"
+    assert _ts(119.999) == "0:02:00.00"
+    assert _ts(3.004) == "0:00:03.00"
+    assert _ts(3725.5) == "1:02:05.50"
+
+
+def test_every_word_is_highlighted_while_spoken():
+    # real word timings from a 45s clip (independent speech model), fed through the caption logic
+    import re
+    raw = [(18.24, 18.40, "You"), (18.40, 18.64, "have"), (18.64, 18.88, "until"), (18.88, 19.04, "next"),
+           (19.04, 19.52, "morning,"), (19.52, 19.68, "we're"), (19.68, 20.32, "fucking."), (20.32, 20.88, "Chilling"),
+           (20.88, 22.08, "then."), (22.08, 22.40, "Should"), (22.40, 22.56, "we"), (22.56, 22.88, "get"),
+           (22.88, 23.20, "everything"), (23.20, 23.36, "for"), (23.36, 24.08, "Lucia,"), (24.08, 24.24, "or")]
+    words = [Word(*w) for w in raw]
+    ev = caption_events(words)
+    for w in words:
+        t = w.start + 0.05
+        on = [e for e in ev if e[0] <= t < e[1]]
+        assert len(on) == 1, f"{w.text}: {len(on)} captions on screen"
+        hl = re.findall(r"\{\\c&H00FFFF&\}(.*?)\{\\c&HFFFFFF&\}", on[0][2])
+        assert hl == [clean_word(w.text)], f"{w.text}: highlighted {hl}"
+
+
+def test_speech_hint():
+    from clipwatch.cli import speech_hint
+    assert speech_hint("joe_bartolozzi", "Joe_Bartolozzi (live) 2026-11-20 03:34") == \
+        "joe bartolozzi live stream. Chat, subs, sub only mode."
+    assert "GTA 6 LIVE GAMEPLAY" in speech_hint("wynnsanity", "GTA 6 LIVE GAMEPLAY 60 FPS - PS5 PRO")

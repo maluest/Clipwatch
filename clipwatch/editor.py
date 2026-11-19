@@ -25,6 +25,7 @@ class EditOptions:
     whisper_model: str = "auto"  # large-v3-turbo on an NVIDIA GPU, small on the CPU
     device: str = "auto"
     font: str = "Arial"
+    speech_hint: str = ""  # streamer name, game etc., helps the speech model spell them right
     cam_memory: Path | None = None  # file remembering where this channel's webcam was last time
 
 
@@ -144,7 +145,7 @@ def make_short(source: Path, start: float, duration: float, out_dir: Path, opts:
         _run([ff, "-y", "-hide_banner", "-loglevel", "error", *_input_args(source, start, duration),
               "-vn", "-ac", "1", "-ar", "16000", str(wav)], out_dir)
         log("[edit] writing captions (listening to the clip)")
-        words = cap.transcribe(wav, opts.whisper_model, opts.device, log)
+        words = cap.transcribe(wav, opts.whisper_model, opts.device, log, hint=opts.speech_hint)
         log(f"[edit] captions done ({len(words)} words)")
         wav.unlink(missing_ok=True)
     if not (opts.captions and audio):

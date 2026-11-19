@@ -50,6 +50,19 @@ def _hook_fn(a, streamer: str, stream_title: str, chat: list[str]):
     return fn
 
 
+def speech_hint(channel: str, title: str = "") -> str:
+    """A short prompt for the speech model: who is talking and what about. Twitch titles
+    from yt-dlp look like 'name (live) 2026-11-20 03:34', so dates and '(live)' are dropped."""
+    import re as _re
+    name = channel.replace("_", " ").strip()
+    t = _re.sub(r"\(live\)|\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?", "", title or "").strip(" -|")
+    parts = [f"{name} live stream."]
+    if t and t.lower() != channel.lower() and t.lower() != name.lower():
+        parts.append(t.rstrip(".") + ".")
+    parts.append("Chat, subs, sub only mode.")
+    return " ".join(parts)
+
+
 def _suggest_title(lines: list[str]) -> str:
     words = Counter()
     for line in lines:
@@ -175,6 +188,7 @@ def cmd_watch(a) -> int:
         log("Checking the stream is live...")
         title = check_live(stream.url, stream.platform)
         stream_title = title
+        opts.speech_hint = speech_hint(stream.channel, title)
         log(f"Live: {title}")
     log(f"Watching {stream.platform}: {stream.url}")
     log(f"Clips will be saved in: {out_root.resolve()}")
