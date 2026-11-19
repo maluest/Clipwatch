@@ -1,5 +1,6 @@
 """Turn a stretch of stream into a finished vertical short (1080x1920):
-layout (blurred background / full crop / facecam on top), levelled sound, burned-in captions."""
+layout (split screen with the streamer on top / blurred background / full crop),
+levelled sound, burned-in captions."""
 from __future__ import annotations
 
 import subprocess
@@ -7,14 +8,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import captions as cap
+from .facecam import detect_cam
 from .tools import ffmpeg_exe, has_audio
 
 W, H = 1080, 1920
+CAM_H = 760  # split screen: streamer panel height on top; the game fills the rest
 
 
 @dataclass
 class EditOptions:
-    layout: str = "fit"  # "fit" | "crop" | "facecam"
+    layout: str = "auto"  # "auto" | "facecam" | "fit" | "crop"
     cam: tuple[float, float, float, float] | None = None  # facecam box as fractions: x, y, w, h
     captions: bool = True
     whisper_model: str = "small"
@@ -37,7 +40,7 @@ def video_filter(layout: str, cam=None) -> str:
         if not cam:
             raise ValueError("The facecam layout needs --cam x,y,w,h (where the webcam is in the stream)")
         x, y, w, h = cam
-        cam_h, game_h = 640, H - 640
+        cam_h, game_h = CAM_H, H - CAM_H
         return (
             f"[0:v]split[a][b];"
             f"[a]crop=iw*{w}:ih*{h}:iw*{x}:ih*{y},scale={W}:{cam_h}:force_original_aspect_ratio=increase,crop={W}:{cam_h}[cam];"
@@ -77,7 +80,23 @@ def make_short(source: Path, start: float, duration: float, out_dir: Path, opts:
         first_input = Path(first_input.read_text(encoding="utf-8").splitlines()[0][6:-1])
     audio = has_audio(str(first_input))
 
-    vf = video_filter(opts.layout, opts.cam)
+    layout, cam = opts.layout, opts.cam
+    if layout in ("auto", "facecam") and not cam:
+        from .tools import video_size
+        fw, fh = video_size(str(first_input))
+        log("[edit] looking for the streamer's webcam")
+        cam = detect_cam(_input_args(source, start, duration), duration, fw / fh, W / CAM_H, log)
+        if cam:
+            log(f"[edit] split screen: webcam found at {','.join(str(v) for v in cam)} "
+                "(if the top crop is off, set it yourself with --cam)")
+            (out_dir / "cam.txt").write_text(",".join(str(v) for v in cam) + "\n", encoding="utf-8")
+        elif layout == "facecam":
+            raise ValueError("Couldn't find the streamer's webcam in this clip. Set it with --cam x,y,w,h")
+        else:
+            log("[edit] no webcam found in this clip: using the full-picture layout")
+    if layout == "auto":
+        layout = "facecam" if cam else "fit"
+    vf = video_filter(layout, cam)
     if opts.captions and audio:
         if words is None:
             wav = out_dir / "audio.wav"
@@ -87,7 +106,7 @@ def make_short(source: Path, start: float, duration: float, out_dir: Path, opts:
             words = cap.transcribe(wav, opts.whisper_model, opts.device, log)
             log(f"[edit] captions done ({len(words)} words)")
             wav.unlink(missing_ok=True)
-        (out_dir / "captions.ass").write_text(cap.build_ass(words, W, H, opts.font), encoding="utf-8")
+        (out_dir / "captions.ass").write_text(cap.build_ass(words, W, H, opts.font, center_y=CAM_H if layout == "facecam" else None), encoding="utf-8")
         (out_dir / "transcript.txt").write_text(" ".join(w.text for w in words) + "\n", encoding="utf-8")
         # relative filename: avoids Windows drive-letter escaping problems inside the filter
         vf += ";[v0]subtitles=captions.ass[v1]"

@@ -217,10 +217,11 @@ def cmd_edit(a) -> int:
 
 # ------------------------------------------------------------------- main -----
 def _add_edit_args(p) -> None:
-    p.add_argument("--layout", choices=["fit", "crop", "facecam"], default="fit",
-                   help="fit = whole picture on a blurred background (default); crop = fill the screen; "
-                        "facecam = webcam on top, gameplay below (needs --cam)")
-    p.add_argument("--cam", help="where the webcam is, as fractions x,y,width,height (e.g. 0.75,0.05,0.22,0.25)")
+    p.add_argument("--layout", choices=["auto", "facecam", "fit", "crop"], default="auto",
+                   help="auto = split screen with the streamer on top when a webcam is found, otherwise fit (default); "
+                        "facecam = always split screen; fit = whole picture on a blurred background; "
+                        "crop = fill the screen")
+    p.add_argument("--cam", help="top-panel crop instead of auto-detecting: fractions x,y,width,height of the stream picture (e.g. 0.75,0.05,0.22,0.25)")
     p.add_argument("--no-captions", action="store_true", help="don't add captions")
     p.add_argument("--model", default="small", help="speech model: tiny, base, small (default), medium, large-v3")
     p.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])

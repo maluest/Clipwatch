@@ -67,8 +67,11 @@ def _clean(text: str) -> str:
 
 
 def build_ass(words: list[Word], width: int = 1080, height: int = 1920, font: str = "Arial",
-              margin_v: int = 560) -> str:
-    """ASS subtitle file: 2-3 words at a time, the word being spoken in yellow."""
+              margin_v: int = 560, center_y: int | None = None) -> str:
+    """ASS subtitle file: 2-3 words at a time, the word being spoken in yellow.
+    center_y: put the captions' middle at this height (e.g. on the split-screen seam)."""
+    align = 5 if center_y is not None else 2
+    place = rf"{{\pos({width // 2},{center_y})}}" if center_y is not None else ""
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {width}
@@ -78,7 +81,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Cap,{font},92,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,7,3,2,60,60,{margin_v},1
+Style: Cap,{font},92,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,7,3,{align},60,60,{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -95,5 +98,5 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 t = _clean(g.text)
                 parts.append(r"{\c&H00FFFF&}" + t + r"{\c&HFFFFFF&}" if j == i else t)
             pop = r"{\fscx108\fscy108\t(0,90,\fscx100\fscy100)}" if i == 0 else ""
-            lines.append(f"Dialogue: 0,{_ts(start)},{_ts(end)},Cap,,0,0,0,,{pop}{' '.join(parts)}")
+            lines.append(f"Dialogue: 0,{_ts(start)},{_ts(end)},Cap,,0,0,0,,{place}{pop}{' '.join(parts)}")
     return header + "\n".join(lines) + "\n"

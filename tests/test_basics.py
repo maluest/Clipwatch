@@ -89,3 +89,27 @@ def test_youtube_chat_line():
     assert message_text(line) == "NO WAY :skull:"
     assert message_text('{"replayChatItemAction": {"actions": [{"addLiveChatTickerItemAction": {}}]}}') is None
     assert message_text("not json") is None
+
+
+def test_streamer_face_is_the_one_that_stays_put():
+    from clipwatch.facecam import cam_box_from_face, pick_streamer_face
+    cam = (0.86, 0.27, 0.04, 0.09)
+    frames = [[cam, (0.1 + i * 0.07, 0.6, 0.05, 0.1)] for i in range(10)]  # game face moves around
+    face = pick_streamer_face(frames)
+    assert abs(face[0] - 0.86) < 0.01 and abs(face[1] - 0.27) < 0.01
+    x, y, w, h = cam_box_from_face(face, 16 / 9, 1080 / 760)
+    assert 0 <= x and x + w <= 1.0001 and 0 <= y and y + h <= 1.0001
+    assert x < 0.86 < x + w and y < 0.27 < y + h
+
+
+def test_no_steady_face_means_no_split_screen():
+    from clipwatch.facecam import pick_streamer_face
+    frames = [[(0.1 + i * 0.08, 0.5, 0.05, 0.1)] for i in range(10)]
+    assert pick_streamer_face(frames) is None
+    assert pick_streamer_face([[] for _ in range(10)]) is None
+
+
+def test_captions_on_the_seam():
+    words = [Word(0, 0.3, "hi")]
+    ass = build_ass(words, center_y=760)
+    assert r"{\pos(540,760)}" in ass and ",7,3,5,60,60," in ass
