@@ -38,8 +38,10 @@ echo Installing clipwatch and its parts (a few minutes the first time)...
 .venv\Scripts\python -m pip install --upgrade -e . || goto :fail
 
 echo.
-where claude >nul 2>nul
-if errorlevel 1 (
+set HAVE_CLAUDE=0
+where claude >nul 2>nul && set HAVE_CLAUDE=1
+if exist "%USERPROFILE%\.local\bin\claude.exe" set HAVE_CLAUDE=1
+if "%HAVE_CLAUDE%"=="0" (
     echo Claude writes each clip's hook title, caption and hashtags using YOUR Claude subscription,
     echo through Claude Code. It isn't installed yet. To set it up:
     echo   1. Open PowerShell ^(normal, not as administrator^) and run:

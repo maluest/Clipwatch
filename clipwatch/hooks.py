@@ -129,7 +129,17 @@ def _finish(out: dict, log, note: str = "") -> dict | None:
 
 
 def claude_code_exe() -> str | None:
-    return shutil.which("claude")
+    """The `claude` program: on PATH, or where the official installer puts it
+    (it isn't always added to PATH, especially until the terminal is reopened)."""
+    found = shutil.which("claude")
+    if found:
+        return found
+    home = Path.home()
+    for c in (home / ".local" / "bin" / "claude.exe", home / ".local" / "bin" / "claude",
+              home / "AppData" / "Roaming" / "npm" / "claude.cmd"):
+        if c.is_file():
+            return str(c)
+    return None
 
 
 def _parse_json_object(text: str) -> dict:

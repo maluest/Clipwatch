@@ -187,3 +187,14 @@ def test_answer_as_plain_text_json_is_still_read(monkeypatch, tmp_path):
     hooks, _ = _fake_claude(monkeypatch, tmp_path, "text")
     out = hooks.write_hook([], 45, "", [], "joe", log=lambda m: None)
     assert out["hook"] == "Joe got jumped in GTA 6"
+
+
+def test_finds_claude_code_in_installer_folder_when_not_on_path(monkeypatch, tmp_path):
+    from clipwatch import hooks
+    monkeypatch.setattr(hooks.shutil, "which", lambda name: None)
+    monkeypatch.setattr(hooks.Path, "home", staticmethod(lambda: tmp_path))
+    assert hooks.claude_code_exe() is None
+    exe = tmp_path / ".local" / "bin" / "claude.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"")
+    assert hooks.claude_code_exe() == str(exe)
