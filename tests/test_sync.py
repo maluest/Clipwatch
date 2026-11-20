@@ -40,3 +40,30 @@ def test_load_wav_reads_clipwatch_audio(tmp_path):
         f.writeframes((np.sin(np.arange(16000) / 5) * 10000).astype(np.int16).tobytes())
     a = load_wav(p)
     assert a.dtype == np.float32 and len(a) == 16000 and 0.2 < abs(a).max() <= 1.0
+
+
+def test_drift_during_the_clip_is_corrected():
+    from clipwatch.sync import fix_words
+    regions = [(s + k * 24, e + k * 24) for k in range(2) for s, e in REGIONS]  # ~45s of talking
+    words = []
+    for s, e in regions:
+        t = s
+        while t + 0.3 <= e:
+            words.append(Word(t, t + 0.28, "w"))
+            t += 0.32
+    truth = [w.start for w in words]
+    # captions drift: on time at the start, 0.8s early by the end (like squeezed-out audio holes)
+    end = max(truth)
+    drifted = [Word(w.start - 0.8 * w.start / end, w.end - 0.8 * w.start / end, "w") for w in words]
+    fixed, rep = fix_words(drifted, regions)
+    errs = [abs(f.start - t) for f, t in zip(fixed, truth)]
+    before = [abs(d.start - t) for d, t in zip(drifted, truth)]
+    assert max(before) > 0.7
+    assert sum(errs) / len(errs) < 0.12, f"mean error after fixing {sum(errs) / len(errs):.2f}s"
+    assert any(w[3] for w in rep.windows)
+
+
+def test_report_text_mentions_windows():
+    from clipwatch.sync import fix_words
+    _, rep = fix_words(_words(0.0), REGIONS)
+    assert "in sync" in rep.text() and "words checked" in rep.text()

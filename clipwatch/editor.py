@@ -144,18 +144,35 @@ def make_short(source: Path, start: float, duration: float, out_dir: Path, opts:
             log("[edit] no webcam found in this clip: using the full-picture layout")
     if layout == "auto":
         layout = "facecam" if cam else "fit"
-    vf = video_filter(layout, cam, (fw, fh))
+    vf = video_filter(layout, cam, (fw, fh)) + ";[v0]setsar=1,format=yuv420p[vout]"
+
+    # ---- pass 1: the finished clip WITHOUT captions (very high quality) --------------
+    # Captions are then made from this file's own audio: exactly what the viewer hears,
+    # so stream holes, skipped ads or reconnects can't put the words on a different
+    # timeline from the voice.
+    base = out_dir / "base.mp4"
+    cmd = [ff, "-y", "-hide_banner", "-loglevel", "error", *_input_args(source, start, duration),
+           "-filter_complex", vf, "-map", "[vout]"]
+    if audio:
+        cmd += ["-map", "0:a:0", "-af", AUDIO_TIMELINE + ",loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000",
+                "-c:a", "aac", "-b:a", "192k"]
+    cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "14", "-fpsmax", "60", str(base)]
+    log("[edit] rendering vertical clip (pass 1: without captions)")
+    _run(cmd, out_dir)
+    base_args = ["-i", str(base)]
+
+    # ---- captions from the finished clip's audio --------------------------------------
     if opts.captions and audio and words is None:
         wav = out_dir / "audio.wav"
-        _run([ff, "-y", "-hide_banner", "-loglevel", "error", *_input_args(source, start, duration),
+        _run([ff, "-y", "-hide_banner", "-loglevel", "error", *base_args,
               "-vn", "-af", AUDIO_TIMELINE, "-ac", "1", "-ar", "16000", str(wav)], out_dir)
-        log("[edit] writing captions (listening to the clip)")
+        log("[edit] writing captions (listening to the finished clip)")
         words = cap.transcribe(wav, opts.whisper_model, opts.device, log, hint=opts.speech_hint)
         log(f"[edit] captions done ({len(words)} words)")
         from .sync import check_and_fix
         words, report = check_and_fix(words, wav, log)
         if report:
-            (out_dir / "sync.json").write_text(json.dumps(report.__dict__), encoding="utf-8")
+            (out_dir / "sync.json").write_text(json.dumps(report.as_dict(), indent=2), encoding="utf-8")
         wav.unlink(missing_ok=True)
     if not (opts.captions and audio):
         words = []
@@ -163,32 +180,31 @@ def make_short(source: Path, start: float, duration: float, out_dir: Path, opts:
         (out_dir / "transcript.txt").write_text(timed_transcript(words) + "\n", encoding="utf-8")
 
     hook = None
-    if hook_fn:
-        hook = hook_fn(_input_args(source, start, duration), duration, timed_transcript(words))
+    if hook_fn:  # Claude sees frames of the finished vertical clip: what viewers will see
+        hook = hook_fn(base_args, duration, timed_transcript(words))
         if hook:
             (out_dir / "hook.json").write_text(json.dumps(hook, indent=2, ensure_ascii=False), encoding="utf-8")
             post = hook.get("caption", "").strip() + "\n\n" + " ".join(hook.get("hashtags", []))
             (out_dir / "post.txt").write_text(post.strip() + "\n", encoding="utf-8")
 
-    if words or hook:
-        ass = cap.build_ass(words, W, H, opts.font, center_y=CAM_H if layout == "facecam" else None,
-                            hook=(hook or {}).get("hook", ""), emphasis=(hook or {}).get("emphasis", ""))
-        (out_dir / "captions.ass").write_text(ass, encoding="utf-8")
-        # relative filename: avoids Windows drive-letter escaping problems inside the filter
-        vf += ";[v0]subtitles=captions.ass[v1]"
-        vout = "[v1]"
-    else:
-        vout = "[v0]"
-    vf += f";{vout}setsar=1,format=yuv420p[vout]"
-
     out = out_dir / "clip.mp4"
-    cmd = [ff, "-y", "-hide_banner", "-loglevel", "error", *_input_args(source, start, duration),
-           "-filter_complex", vf, "-map", "[vout]"]
+    if not (words or hook):
+        _run([ff, "-y", "-hide_banner", "-loglevel", "error", *base_args, "-c", "copy",
+              "-movflags", "+faststart", str(out)], out_dir)
+        base.unlink(missing_ok=True)
+        return out
+
+    # ---- pass 2: add the hook and captions; the audio is copied untouched -------------
+    ass = cap.build_ass(words, W, H, opts.font, center_y=CAM_H if layout == "facecam" else None,
+                        hook=(hook or {}).get("hook", ""), emphasis=(hook or {}).get("emphasis", ""))
+    (out_dir / "captions.ass").write_text(ass, encoding="utf-8")
+    cmd = [ff, "-y", "-hide_banner", "-loglevel", "error", *base_args,
+           # relative filename: avoids Windows drive-letter escaping problems inside the filter
+           "-vf", "subtitles=captions.ass", "-map", "0:v:0"]
     if audio:
-        cmd += ["-map", "0:a:0", "-af", AUDIO_TIMELINE + ",loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000",
-                "-c:a", "aac", "-b:a", "160k"]
-    cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-fpsmax", "60",
-            "-movflags", "+faststart", str(out)]
-    log("[edit] rendering vertical clip")
+        cmd += ["-map", "0:a:0", "-c:a", "copy"]
+    cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-movflags", "+faststart", str(out)]
+    log("[edit] rendering vertical clip (pass 2: adding hook and captions)")
     _run(cmd, out_dir)
+    base.unlink(missing_ok=True)
     return out

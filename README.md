@@ -49,6 +49,12 @@ Each clip gets its own folder in `clips\<channel>\`:
 
 The first clip takes longer because the speech-to-text model (about 0.5 GB) downloads once.
 
+## Captions stay in sync with the voice
+
+Each clip is rendered in two passes. First the finished clip is made **without** captions; then the captions are made from **that clip's own audio**, exactly what viewers hear, and added in a second pass with the audio copied untouched. So stream hiccups, skipped Twitch ads or reconnects can't move the words away from the voice.
+
+After that, a small voice detector checks the caption timing against the actual speech, for the whole clip and for every 10-second stretch, and corrects anything that's off by more than 0.12 s. Each clip logs the result, for example `[sync] captions match the voice (within 0.02s); all 4 10s windows in sync`, and saves it in `sync.json`.
+
 ## Hook titles (Claude)
 
 For every clip, Claude (Opus) looks at 6 frames from across the clip, the transcript and how chat reacted, works out what actually happened, and writes:
